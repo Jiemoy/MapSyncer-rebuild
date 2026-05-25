@@ -183,6 +183,12 @@ public class RegionConverterStandalone {
         } catch (IOException e) {
             LOGGER.warn("Failed to convert region ({}, {}): {}", regionX, regionZ, e.getMessage());
             return null;
+        } catch (RuntimeException e) {
+            LOGGER.warn("Failed to convert region ({}, {}): {}", regionX, regionZ, e.getMessage());
+            return null;
+        } catch (OutOfMemoryError e) {
+            LOGGER.error("Failed to convert region ({}, {}): Java heap space", regionX, regionZ);
+            return null;
         }
     }
 
@@ -250,15 +256,23 @@ public class RegionConverterStandalone {
 
         try (McaReader reader = new McaReader(mcaPath.toString())) {
             int worldHeightRange = worldTopY - minBuildHeight;
-            for (McaReader.ChunkData chunkData : reader.readAllChunks()) {
-                ChunkDataParser.ChunkInfo chunkInfo = ChunkDataParser.parseChunk(
-                    chunkData.chunkX(), chunkData.chunkZ(), chunkData.nbt(), worldHeightRange
-                );
+            reader.forEachChunk(chunkData -> {
+                try {
+                    ChunkDataParser.ChunkInfo chunkInfo = ChunkDataParser.parseChunk(
+                        chunkData.chunkX(), chunkData.chunkZ(), chunkData.nbt(), worldHeightRange
+                    );
 
-                if (chunkInfo == null) continue;
-
-                processChunk(data, chunkInfo, minBuildHeight, worldTopY, lightMode, caveParams, worldHasSkylight);
-            }
+                    if (chunkInfo != null) {
+                        processChunk(data, chunkInfo, minBuildHeight, worldTopY, lightMode, caveParams, worldHasSkylight);
+                    }
+                } catch (RuntimeException e) {
+                    LOGGER.warn("Skipping chunk ({}, {}) in {}: {}",
+                            chunkData.chunkX(), chunkData.chunkZ(), mcaPath.getFileName(), e.getMessage());
+                } catch (OutOfMemoryError e) {
+                    LOGGER.error("Skipping chunk ({}, {}) in {}: Java heap space",
+                            chunkData.chunkX(), chunkData.chunkZ(), mcaPath.getFileName());
+                }
+            });
         }
 
         return data;

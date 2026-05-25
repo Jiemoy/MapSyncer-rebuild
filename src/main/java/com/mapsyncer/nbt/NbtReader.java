@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * NBT读取器 - 零依赖实现
@@ -56,6 +57,32 @@ public class NbtReader implements AutoCloseable {
      */
     private static final int MAX_COMPOUND_DEPTH = 30;
 
+    /**
+     * Maximum modified-UTF payload size accepted for strings that are kept.
+     *
+     * <p>Chunk map generation only needs short identifiers such as block,
+     * biome, status, and heightmap names. Very large strings are skipped as a
+     * corrupt or irrelevant chunk payload instead of letting readUTF allocate
+     * until the generator thread runs out of heap.</p>
+     */
+    private static final int MAX_STRING_UTF_BYTES = 32_767;
+
+    private static final Set<String> SKIPPED_TAG_NAMES = Set.of(
+            "fluid_ticks",
+            "block_ticks",
+            "TileTicks",
+            "ToBeTicked",
+            "LiquidsToBeTicked",
+            "entities",
+            "Entities",
+            "block_entities",
+            "TileEntities",
+            "PostProcessing",
+            "Lights",
+            "CarvingMasks",
+            "structures"
+    );
+
     /** 数据输入流，用于读取二进制NBT数据 */
     private final DataInputStream in;
 
@@ -85,7 +112,7 @@ public class NbtReader implements AutoCloseable {
         if (type != Tag.TAG_COMPOUND) {
             throw new IOException("NBT文档必须以Compound开头，实际类型: " + type);
         }
-        String name = in.readUTF();
+        String name = readUtf();
         return readCompoundContent(name);
     }
 
@@ -102,7 +129,7 @@ public class NbtReader implements AutoCloseable {
         if (type == Tag.TAG_END) {
             return new Tag.End();
         }
-        String name = in.readUTF();
+        String name = readUtf();
         return readPayload(type, name);
     }
 
@@ -135,7 +162,7 @@ public class NbtReader implements AutoCloseable {
             case Tag.TAG_BYTE_ARRAY:
                 return readByteArray(name);
             case Tag.TAG_STRING:
-                return new Tag.StringTag(name, in.readUTF());
+                return new Tag.StringTag(name, readUtf());
             case Tag.TAG_LIST:
                 return readListContent(name);
             case Tag.TAG_COMPOUND:
@@ -274,10 +301,118 @@ public class NbtReader implements AutoCloseable {
                 currentDepth--;
                 break;
             }
-            String childName = in.readUTF();
+            String childName = readUtf();
+            if (shouldSkipTag(childName)) {
+                skipPayload(type);
+                continue;
+            }
             children.put(childName, readPayload(type, childName));
         }
         return new Tag.Compound(name, children);
+    }
+
+    private boolean shouldSkipTag(String name) {
+        return SKIPPED_TAG_NAMES.contains(name);
+    }
+
+    private String readUtf() throws IOException {
+        int utfLength = in.readUnsignedShort();
+        if (utfLength > MAX_STRING_UTF_BYTES) {
+            skipFully(utfLength);
+            throw new IOException("NBT string length exceeded: " + utfLength + " (max " + MAX_STRING_UTF_BYTES + ")");
+        }
+
+        byte[] utfData = new byte[utfLength + 2];
+        utfData[0] = (byte) ((utfLength >>> 8) & 0xFF);
+        utfData[1] = (byte) (utfLength & 0xFF);
+        in.readFully(utfData, 2, utfLength);
+        try (DataInputStream utfIn = new DataInputStream(new ByteArrayInputStream(utfData))) {
+            return utfIn.readUTF();
+        } catch (OutOfMemoryError e) {
+            throw new IOException("Failed to decode NBT string: Java heap space", e);
+        }
+    }
+
+    private void skipPayload(byte type) throws IOException {
+        switch (type) {
+            case Tag.TAG_END:
+                return;
+            case Tag.TAG_BYTE:
+                skipFully(1);
+                return;
+            case Tag.TAG_SHORT:
+                skipFully(2);
+                return;
+            case Tag.TAG_INT:
+            case Tag.TAG_FLOAT:
+                skipFully(4);
+                return;
+            case Tag.TAG_LONG:
+            case Tag.TAG_DOUBLE:
+                skipFully(8);
+                return;
+            case Tag.TAG_BYTE_ARRAY: {
+                int length = readNonNegativeLength("ByteArray");
+                skipFully(length);
+                return;
+            }
+            case Tag.TAG_STRING: {
+                int length = in.readUnsignedShort();
+                skipFully(length);
+                return;
+            }
+            case Tag.TAG_LIST: {
+                byte elementType = in.readByte();
+                int length = readNonNegativeLength("List");
+                for (int i = 0; i < length; i++) {
+                    skipPayload(elementType);
+                }
+                return;
+            }
+            case Tag.TAG_COMPOUND:
+                while (true) {
+                    byte childType = in.readByte();
+                    if (childType == Tag.TAG_END) {
+                        return;
+                    }
+                    skipPayload(Tag.TAG_STRING);
+                    skipPayload(childType);
+                }
+            case Tag.TAG_INT_ARRAY: {
+                int length = readNonNegativeLength("IntArray");
+                skipFully((long) length * Integer.BYTES);
+                return;
+            }
+            case Tag.TAG_LONG_ARRAY: {
+                int length = readNonNegativeLength("LongArray");
+                skipFully((long) length * Long.BYTES);
+                return;
+            }
+            default:
+                throw new IOException("未知NBT类型: " + type);
+        }
+    }
+
+    private int readNonNegativeLength(String tagType) throws IOException {
+        int length = in.readInt();
+        if (length < 0) {
+            throw new IOException(tagType + "长度不能为负: " + length);
+        }
+        return length;
+    }
+
+    private void skipFully(long bytes) throws IOException {
+        long remaining = bytes;
+        while (remaining > 0) {
+            long skipped = in.skip(remaining);
+            if (skipped <= 0) {
+                if (in.read() == -1) {
+                    throw new EOFException("Unexpected EOF while skipping NBT payload");
+                }
+                skipped = 1;
+            }
+            remaining -= skipped;
+        }
     }
 
     /**

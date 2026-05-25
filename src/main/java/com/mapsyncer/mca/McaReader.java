@@ -46,6 +46,9 @@ public class McaReader implements AutoCloseable {
      */
     private static final int CHUNKS_PER_REGION = 32;
 
+    private static final int MAX_CHUNK_DATA_LENGTH = 4 * 1024 * 1024;
+    private static final int MAX_DECOMPRESSED_NBT_LENGTH = 16 * 1024 * 1024;
+
     // 压缩类型常量
     /**
      * GZIP压缩类型标识
@@ -185,6 +188,9 @@ public class McaReader implements AutoCloseable {
         if (totalLength <= 1) {
             return null;
         }
+        if (totalLength > MAX_CHUNK_DATA_LENGTH) {
+            throw new IOException("Chunk data length too large: " + totalLength + " bytes");
+        }
 
         // 读取压缩类型
         int compressionType = raf.readUnsignedByte();
@@ -243,6 +249,23 @@ public class McaReader implements AutoCloseable {
         return chunks;
     }
 
+    public void forEachChunk(ChunkConsumer consumer) throws IOException {
+        for (int localX = 0; localX < CHUNKS_PER_REGION; localX++) {
+            for (int localZ = 0; localZ < CHUNKS_PER_REGION; localZ++) {
+                try {
+                    Tag.Compound nbt = readChunkNbt(localX, localZ);
+                    if (nbt != null) {
+                        consumer.accept(new ChunkData(localX, localZ, nbt));
+                    }
+                } catch (IOException | RuntimeException e) {
+                    LOGGER.warn("读取chunk ({}, {}) 失败: {}", localX, localZ, e.getMessage());
+                } catch (OutOfMemoryError e) {
+                    LOGGER.error("读取chunk ({}, {}) 内存不足，已跳过该chunk", localX, localZ);
+                }
+            }
+        }
+    }
+
     /**
      * 解压缩chunk数据
      *
@@ -270,6 +293,7 @@ public class McaReader implements AutoCloseable {
                     int len;
                     while ((len = gis.read(buf)) > 0) {
                         baos.write(buf, 0, len);
+                        checkDecompressedSize(baos.size());
                     }
                 }
                 return baos.toByteArray();
@@ -280,11 +304,13 @@ public class McaReader implements AutoCloseable {
                     int len;
                     while ((len = iis.read(buf)) > 0) {
                         baos.write(buf, 0, len);
+                        checkDecompressedSize(baos.size());
                     }
                 }
                 return baos.toByteArray();
 
             case COMPRESS_NONE:
+                checkDecompressedSize(data.length);
                 return data;
 
             case COMPRESS_LZ4:
@@ -294,6 +320,17 @@ public class McaReader implements AutoCloseable {
             default:
                 throw new IOException("未知压缩类型: " + compressionType);
         }
+    }
+
+    private void checkDecompressedSize(int size) throws IOException {
+        if (size > MAX_DECOMPRESSED_NBT_LENGTH) {
+            throw new IOException("Decompressed chunk NBT too large: " + size + " bytes");
+        }
+    }
+
+    @FunctionalInterface
+    public interface ChunkConsumer {
+        void accept(ChunkData chunkData) throws IOException;
     }
 
     /**
