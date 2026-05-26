@@ -13,6 +13,9 @@ public class MapSyncerClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
+        ClientConfig.load();
+        SyncHudOverlay.register();
+
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) ->
                 MapSyncerCommand.register(dispatcher));
 

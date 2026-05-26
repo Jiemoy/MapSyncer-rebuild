@@ -39,6 +39,7 @@ processResources {
 			mod_description: project.mod_description,
 			mod_authors: project.mod_authors,
 			loader_version: project.loader_version,
+			fabric_api_version: project.fabric_api_version,
 			minecraft_version: project.minecraft_version
 	]
 	inputs.properties props

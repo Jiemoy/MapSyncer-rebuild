@@ -4,6 +4,7 @@ import com.mapsyncer.config.ModConfig;
 import com.mapsyncer.config.ModConfig.UpdateMode;
 import com.mapsyncer.server.CacheGenerateCommand;
 import com.mapsyncer.server.DimensionRegistry;
+import com.mapsyncer.server.DirtyRegionTracker;
 import com.mapsyncer.server.IncrementalUpdateHandler;
 import com.mapsyncer.server.PlayerJoinHandler;
 import com.mapsyncer.server.ServerSyncHandler;
@@ -43,8 +44,10 @@ public class MapSyncer implements ModInitializer {
             }
         });
 
-        ServerLifecycleEvents.SERVER_STOPPING.register(server ->
-                IncrementalUpdateHandler.getInstance().stop());
+        ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
+            IncrementalUpdateHandler.getInstance().stop();
+            DirtyRegionTracker.clear();
+        });
 
         ServerLifecycleEvents.SERVER_STOPPED.register(PlayerJoinHandler::onServerStopped);
 

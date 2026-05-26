@@ -119,7 +119,8 @@ public class ChunkDataParser {
      * @param worldHeightRange 维度高度范围（worldTopY - minBuildHeight）
      * @return ChunkInfo对象，如果区块无效则返回null
      */
-    public static ChunkInfo parseChunk(int localX, int localZ, Tag.Compound chunkNbt, int worldHeightRange) {
+    public static ChunkInfo parseChunk(int localX, int localZ, Tag.Compound chunkNbt,
+                                       int minBuildHeight, int worldHeightRange) {
         // 检查chunk状态 - 只处理已生成地形的区块
         // 区块生成顺序：empty -> structure_starts -> structure_references -> biomes -> noise -> surface -> ...
         // 只有 surface 及之后的状态才有实际地形数据
@@ -146,7 +147,7 @@ public class ChunkDataParser {
         int chunkBottomY = yPos * 16;
 
         // 解析高度图（传入维度高度范围）
-        int[][] heightmap = parseHeightmap(rootTag, chunkBottomY, worldHeightRange);
+        int[][] heightmap = parseHeightmap(rootTag, minBuildHeight, worldHeightRange);
 
         // 解析sections
         List<ChunkSectionParser.SectionData> sections = new ArrayList<>();
@@ -183,8 +184,11 @@ public class ChunkDataParser {
      * @param worldHeightRange 维度高度范围（用于计算bitsPerHeight）
      * @return 16x16的高度图数组（存储世界绝对Y坐标）
      */
-    private static int[][] parseHeightmap(Tag.Compound rootTag, int chunkBottomY, int worldHeightRange) {
+    private static int[][] parseHeightmap(Tag.Compound rootTag, int minBuildHeight, int worldHeightRange) {
         int[][] heightmap = new int[16][16];
+        for (int x = 0; x < 16; x++) {
+            java.util.Arrays.fill(heightmap[x], minBuildHeight);
+        }
 
         // 尝试新格式 Heightmaps
         if (rootTag.contains("Heightmaps", Tag.TAG_COMPOUND)) {
@@ -196,7 +200,7 @@ public class ChunkDataParser {
                 long[] data = heightmaps.getLongArray("MOTION_BLOCKING_NO_LEAVES");
                 int bitsPerHeight = calculateBitsPerHeight(data.length, worldHeightRange);
                 if (bitsPerHeight > 0 && bitsPerHeight <= 10) {
-                    decodeHeightmapLongArray(data, bitsPerHeight, chunkBottomY, heightmap);
+                    decodeHeightmapLongArray(data, bitsPerHeight, minBuildHeight, heightmap);
                     return heightmap;
                 }
             }
@@ -206,7 +210,7 @@ public class ChunkDataParser {
                 long[] data = heightmaps.getLongArray("WORLD_SURFACE");
                 int bitsPerHeight = calculateBitsPerHeight(data.length, worldHeightRange);
                 if (bitsPerHeight > 0 && bitsPerHeight <= 10) {
-                    decodeHeightmapLongArray(data, bitsPerHeight, chunkBottomY, heightmap);
+                    decodeHeightmapLongArray(data, bitsPerHeight, minBuildHeight, heightmap);
                     return heightmap;
                 }
             }
@@ -272,10 +276,10 @@ public class ChunkDataParser {
      *
      * @param data long数组
      * @param bitsPerHeight 每个高度值的位数b
-     * @param chunkBottomY chunk的最低Y坐标（作为基线）
+     * @param minBuildHeight 维度最低建筑高度（作为基线）
      * @param heightmap 输出高度图数组
      */
-    private static void decodeHeightmapLongArray(long[] data, int bitsPerHeight, int chunkBottomY, int[][] heightmap) {
+    private static void decodeHeightmapLongArray(long[] data, int bitsPerHeight, int minBuildHeight, int[][] heightmap) {
         if (data == null || data.length == 0 || bitsPerHeight <= 0) {
             return;
         }
@@ -293,14 +297,13 @@ public class ChunkDataParser {
                 int bitOffset = (i % u) * bitsPerHeight;
 
                 if (longIndex >= data.length) {
-                    heightmap[x][z] = chunkBottomY;
+                    heightmap[x][z] = minBuildHeight;
                     continue;
                 }
 
                 long rawValue = (data[longIndex] >>> bitOffset) & ((1L << bitsPerHeight) - 1L);
+                heightmap[x][z] = minBuildHeight + (int) rawValue;
 
-                // 世界绝对Y = chunkBottomY + 偏移量（chunkBottomY作为基线）
-                heightmap[x][z] = chunkBottomY + (int) rawValue;
             }
         }
     }

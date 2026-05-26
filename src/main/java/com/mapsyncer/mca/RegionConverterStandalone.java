@@ -259,7 +259,8 @@ public class RegionConverterStandalone {
             reader.forEachChunk(chunkData -> {
                 try {
                     ChunkDataParser.ChunkInfo chunkInfo = ChunkDataParser.parseChunk(
-                        chunkData.chunkX(), chunkData.chunkZ(), chunkData.nbt(), worldHeightRange
+                        chunkData.chunkX(), chunkData.chunkZ(), chunkData.nbt(),
+                        minBuildHeight, worldHeightRange
                     );
 
                     if (chunkInfo != null) {
@@ -328,13 +329,17 @@ public class RegionConverterStandalone {
                                        boolean worldHasSkylight) {
         int chunkX = chunk.chunkX();
         int chunkZ = chunk.chunkZ();
+        if (chunkX < 0 || chunkX >= CHUNKS_PER_REGION || chunkZ < 0 || chunkZ >= CHUNKS_PER_REGION) {
+            LOGGER.warn("Skipping chunk with out-of-region local coordinates ({}, {})", chunkX, chunkZ);
+            return;
+        }
 
         // 标记该区块已存在（区分区块未生成和区块内虚空区域）
         data.chunkExists[chunkX][chunkZ] = true;
 
         // 洞穴模式参数
         int caveStart = caveParams.caveStart();
-        int caveDepth = caveParams.caveDepth();
+        int caveDepth = Math.max(0, caveParams.caveDepth());
 
         // 洞穴模式判断
         boolean isCaveMode = caveStart != Integer.MAX_VALUE;
@@ -359,8 +364,8 @@ public class RegionConverterStandalone {
 
                 if (isCaveMode) {
                     // 洞穴模式：从 caveStart 向下扫描到 caveStart - caveDepth
-                    startY = caveStart;
-                    scanBottomY = Math.max(caveStart - caveDepth, minBuildHeight);
+                    startY = caveStart == Integer.MIN_VALUE ? worldTopY - 1 : clamp(caveStart, minBuildHeight, worldTopY - 1);
+                    scanBottomY = Math.max(startY - caveDepth, minBuildHeight);
                 } else {
                     // 地表模式：从高度图向下扫描
                     startY = ChunkDataParser.getHeightmapStartY(chunk, lx, lz, worldTopY);
@@ -832,6 +837,10 @@ public class RegionConverterStandalone {
      */
     private static int encodeHeightToParams(int height) {
         return (height & 0xFF) << 12 | ((height >> 8) & 0xF) << 25;
+    }
+
+    private static int clamp(int value, int min, int max) {
+        return Math.max(min, Math.min(max, value));
     }
 
     /**

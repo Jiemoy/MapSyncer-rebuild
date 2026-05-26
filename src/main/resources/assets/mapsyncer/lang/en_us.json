@@ -78,7 +78,11 @@
   "mapsyncer.status.cache_dim": "  %s: %d regions, %.1f MB",
 
   "mapsyncer.sync.resume_header": "Sync Resume Available",
-  "mapsyncer.sync.resume_prompt": "%s. Click below to continue:",
+  "mapsyncer.sync.resume_prompt": "Previous sync was interrupted. Click below to continue:",
+  "mapsyncer.sync.resume_button": "Resume Sync",
+  "mapsyncer.sync.resume_hover": "Continue the interrupted MapSyncer sync",
   "mapsyncer.sync.state_cleared": "Sync state cleared",
-  "mapsyncer.sync.interrupted": "Sync was interrupted, resume available"
+  "mapsyncer.sync.interrupted": "Sync was interrupted, resume available",
+  "mapsyncer.hud.syncing": "Syncing map",
+  "mapsyncer.hud.completed": "Map sync complete"
 }
