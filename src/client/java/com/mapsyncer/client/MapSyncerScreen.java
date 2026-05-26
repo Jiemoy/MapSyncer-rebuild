@@ -76,16 +76,19 @@ public class MapSyncerScreen extends Screen {
         clearWidgets();
         int panelLeft = panelLeft();
         int panelTop = panelTop();
-        int x = panelLeft + 16;
+        int x = contentLeft();
         int y = panelTop + 30;
+        int gap = 8;
+        int tabCount = isOwner() ? 3 : 2;
+        int tabWidth = Math.min(108, Math.max(72, (contentWidth() - gap * (tabCount - 1)) / tabCount));
 
-        addTabButton(Tab.SYNC, x, y);
-        x += 118;
+        addTabButton(Tab.SYNC, x, y, tabWidth);
+        x += tabWidth + gap;
         if (isOwner()) {
-            addTabButton(Tab.ADMIN, x, y);
-            x += 118;
+            addTabButton(Tab.ADMIN, x, y, tabWidth);
+            x += tabWidth + gap;
         }
-        addTabButton(Tab.SETTINGS, x, y);
+        addTabButton(Tab.SETTINGS, x, y, tabWidth);
 
         switch (activeTab) {
             case SYNC -> buildSyncWidgets(panelLeft, panelTop);
@@ -95,7 +98,7 @@ public class MapSyncerScreen extends Screen {
         updateDynamicButtons();
     }
 
-    private void addTabButton(Tab tab, int x, int y) {
+    private void addTabButton(Tab tab, int x, int y, int width) {
         Button button = Button.builder(tab.title(), b -> {
             activeTab = tab;
             rebuildGui();
@@ -103,43 +106,77 @@ public class MapSyncerScreen extends Screen {
                 AdminStatusClientState.requestNow();
                 lastAdminPoll = System.currentTimeMillis();
             }
-        }).bounds(x, y, 108, 20).build();
+        }).bounds(x, y, width, 20).build();
         button.active = activeTab != tab;
         addRenderableWidget(button);
     }
 
     private void buildSyncWidgets(int panelLeft, int panelTop) {
-        int x = panelLeft + 28;
+        int x = contentLeft();
         int y = panelTop + 122;
+        int gap = 10;
+        int buttonWidth = Math.max(1, (contentWidth() - gap) / 2);
         syncCurrentButton = addRenderableWidget(Button.builder(
                 Component.translatable("mapsyncer.gui.sync.current"),
                 b -> MapSyncerCommand.sendSyncRequest(Minecraft.getInstance(), currentDimensionId(), false)
-        ).bounds(x, y, 174, 22).build());
+        ).bounds(x, y, buttonWidth, 22).build());
         syncAllButton = addRenderableWidget(Button.builder(
                 Component.translatable("mapsyncer.gui.sync.all"),
                 b -> MapSyncerCommand.sendSyncRequest(Minecraft.getInstance(), "all", true)
-        ).bounds(x + 186, y, 174, 22).build());
+        ).bounds(x + buttonWidth + gap, y, buttonWidth, 22).build());
     }
 
     private void buildAdminWidgets(int panelLeft, int panelTop) {
-        int x = panelLeft + 28;
+        int x = contentLeft();
         int y = panelTop + 94;
+        int contentWidth = contentWidth();
+        int gap = 8;
 
-        dimensionBox = addRenderableWidget(new EditBox(font, x, y, 238, 20,
+        dimensionBox = addRenderableWidget(new EditBox(font, x, y, Math.min(238, contentWidth), 20,
                 Component.translatable("mapsyncer.gui.admin.dimension")));
         dimensionBox.setMaxLength(128);
         dimensionBox.setValue(currentDimensionId());
 
-        incrementalButton = addRenderableWidget(Button.builder(
+        if (contentWidth >= 470) {
+            int buttonWidth = Math.max(1, (contentWidth - gap * 2) / 3);
+            incrementalButton = addRenderableWidget(Button.builder(
+                    Component.translatable("mapsyncer.gui.admin.incremental"),
+                    b -> {
+                        sendServerCommand("mapsyncer incremental run");
+                        AdminStatusClientState.requestNow();
+                        lastAdminPoll = System.currentTimeMillis();
+                    }
+            ).bounds(x, y + 34, buttonWidth, 22).build());
+
+            forceButton = addRenderableWidget(Button.builder(
+                    Component.translatable("mapsyncer.gui.admin.force"),
+                    b -> {
+                        String dimension = sanitizeDimensionInput(dimensionBox.getValue());
+                        sendServerCommand("mapsyncer generate " + dimension + " force");
+                        AdminStatusClientState.requestNow();
+                        lastAdminPoll = System.currentTimeMillis();
+                    }
+            ).bounds(x + buttonWidth + gap, y + 34, buttonWidth, 22).build());
+
+            addRenderableWidget(Button.builder(
+                    Component.translatable("mapsyncer.gui.admin.refresh"),
+                    b -> {
+                        AdminStatusClientState.requestNow();
+                        lastAdminPoll = System.currentTimeMillis();
+                    }
+            ).bounds(x + (buttonWidth + gap) * 2, y + 34, buttonWidth, 22).build());
+        } else {
+            int buttonWidth = Math.max(1, (contentWidth - gap) / 2);
+            incrementalButton = addRenderableWidget(Button.builder(
                 Component.translatable("mapsyncer.gui.admin.incremental"),
                 b -> {
                     sendServerCommand("mapsyncer incremental run");
                     AdminStatusClientState.requestNow();
                     lastAdminPoll = System.currentTimeMillis();
                 }
-        ).bounds(x, y + 34, 174, 22).build());
+            ).bounds(x, y + 34, buttonWidth, 22).build());
 
-        forceButton = addRenderableWidget(Button.builder(
+            forceButton = addRenderableWidget(Button.builder(
                 Component.translatable("mapsyncer.gui.admin.force"),
                 b -> {
                     String dimension = sanitizeDimensionInput(dimensionBox.getValue());
@@ -147,65 +184,71 @@ public class MapSyncerScreen extends Screen {
                     AdminStatusClientState.requestNow();
                     lastAdminPoll = System.currentTimeMillis();
                 }
-        ).bounds(x + 186, y + 34, 174, 22).build());
+            ).bounds(x + buttonWidth + gap, y + 34, buttonWidth, 22).build());
 
-        addRenderableWidget(Button.builder(
+            addRenderableWidget(Button.builder(
                 Component.translatable("mapsyncer.gui.admin.refresh"),
                 b -> {
                     AdminStatusClientState.requestNow();
                     lastAdminPoll = System.currentTimeMillis();
                 }
-        ).bounds(x + 372, y + 34, 116, 22).build());
+            ).bounds(x, y + 62, buttonWidth, 22).build());
+        }
 
         AdminStatusClientState.requestNow();
         lastAdminPoll = System.currentTimeMillis();
     }
 
     private void buildSettingsWidgets(int panelLeft, int panelTop) {
-        int x = panelLeft + 28;
-        int y = panelTop + 88;
+        int x = contentLeft();
+        int y = settingsStartY();
+        int controlWidth = Math.min(130, Math.max(104, contentWidth() / 3));
+        int controlX = contentRight() - controlWidth;
+        int stepperWidth = Math.min(130, Math.max(122, controlWidth));
+        int stepX = contentRight() - stepperWidth;
+        int valueWidth = stepperWidth - 76;
 
         autoSyncButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
             ClientConfig.VALUES.autoSyncOnJoin = !ClientConfig.VALUES.autoSyncOnJoin;
             ClientConfig.save();
             updateSettingsButtonMessages();
-        }).bounds(x + 310, y, 130, 20).build());
+        }).bounds(controlX, y, controlWidth, 20).build());
 
         hudButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
             ClientConfig.VALUES.showSyncHud = !ClientConfig.VALUES.showSyncHud;
             ClientConfig.save();
             updateSettingsButtonMessages();
-        }).bounds(x + 310, y + 48, 130, 20).build());
+        }).bounds(controlX, y + settingsRowGap(), controlWidth, 20).build());
 
         addRenderableWidget(Button.builder(Component.literal("-"), b -> {
             ClientConfig.VALUES.autoSyncDelaySeconds = Math.max(1, ClientConfig.VALUES.autoSyncDelaySeconds - 1);
             ClientConfig.save();
             updateSettingsButtonMessages();
-        }).bounds(x + 310, y + 96, 32, 20).build());
+        }).bounds(stepX, y + settingsRowGap() * 2, 32, 20).build());
         delayValueButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
-        }).bounds(x + 348, y + 96, 54, 20).build());
+        }).bounds(stepX + 38, y + settingsRowGap() * 2, valueWidth, 20).build());
         delayValueButton.active = false;
         addRenderableWidget(Button.builder(Component.literal("+"), b -> {
             ClientConfig.VALUES.autoSyncDelaySeconds = Math.min(60, ClientConfig.VALUES.autoSyncDelaySeconds + 1);
             ClientConfig.save();
             updateSettingsButtonMessages();
-        }).bounds(x + 408, y + 96, 32, 20).build());
+        }).bounds(stepX + 44 + valueWidth, y + settingsRowGap() * 2, 32, 20).build());
 
         addRenderableWidget(Button.builder(Component.literal("-"), b -> {
             ClientConfig.VALUES.syncProgressChatIntervalPercent = Math.max(0,
                     ClientConfig.VALUES.syncProgressChatIntervalPercent - 5);
             ClientConfig.save();
             updateSettingsButtonMessages();
-        }).bounds(x + 310, y + 144, 32, 20).build());
+        }).bounds(stepX, y + settingsRowGap() * 3, 32, 20).build());
         chatIntervalValueButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
-        }).bounds(x + 348, y + 144, 54, 20).build());
+        }).bounds(stepX + 38, y + settingsRowGap() * 3, valueWidth, 20).build());
         chatIntervalValueButton.active = false;
         addRenderableWidget(Button.builder(Component.literal("+"), b -> {
             ClientConfig.VALUES.syncProgressChatIntervalPercent = Math.min(100,
                     ClientConfig.VALUES.syncProgressChatIntervalPercent + 5);
             ClientConfig.save();
             updateSettingsButtonMessages();
-        }).bounds(x + 408, y + 144, 32, 20).build());
+        }).bounds(stepX + 44 + valueWidth, y + settingsRowGap() * 3, 32, 20).build());
 
         updateSettingsButtonMessages();
     }
@@ -220,7 +263,7 @@ public class MapSyncerScreen extends Screen {
     }
 
     private void drawSyncTab(GuiGraphicsExtractor graphics) {
-        int x = panelLeft() + 28;
+        int x = contentLeft();
         int y = panelTop() + 72;
         boolean installed = MapPacketReceiver.isServerInstalled();
         Component serverStatus = installed
@@ -228,10 +271,10 @@ public class MapSyncerScreen extends Screen {
                 : Component.translatable("mapsyncer.gui.sync.server_missing");
         graphics.text(font, Component.translatable("mapsyncer.gui.sync.dimension", currentDimensionId()), x, y, 0xFFE8F0F6, false);
         graphics.text(font, serverStatus, x, y + 16, installed ? 0xFF8CE99A : 0xFFFFC857, false);
-        graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.sync.tip"), x, y + 88, panelWidth() - 56, 0xFFB9C3CC);
+        graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.sync.tip"), x, y + 88, contentWidth(), 0xFFB9C3CC);
 
         int barY = y + 52;
-        int barWidth = panelWidth() - 56;
+        int barWidth = contentWidth();
         int percent = visibleSyncPercent();
         graphics.text(font, Component.translatable("mapsyncer.gui.sync.progress",
                 SyncProgressTracker.getProcessed(), SyncProgressTracker.getTotal(), percent), x, barY - 12, 0xFFE8F0F6, false);
@@ -244,12 +287,12 @@ public class MapSyncerScreen extends Screen {
     }
 
     private void drawAdminTab(GuiGraphicsExtractor graphics) {
-        int x = panelLeft() + 28;
+        int x = contentLeft();
         int y = panelTop() + 72;
         graphics.text(font, Component.translatable("mapsyncer.gui.admin.dimension_label"), x, y + 10, 0xFFE8F0F6, false);
-        graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.admin.warning"), x, y + 86, panelWidth() - 56, 0xFFFFC857);
+        graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.admin.warning"), x, y + 90, contentWidth(), 0xFFFFC857);
 
-        int statusY = y + 124;
+        int statusY = y + (contentWidth() >= 470 ? 124 : 134);
         String error = AdminStatusClientState.getLastError();
         PacketHandler.AdminStatusPayload status = AdminStatusClientState.getLastStatus();
         if (!error.isBlank()) {
@@ -280,19 +323,24 @@ public class MapSyncerScreen extends Screen {
     }
 
     private void drawSettingsTab(GuiGraphicsExtractor graphics) {
-        int x = panelLeft() + 28;
-        int y = panelTop() + 88;
-        drawSetting(graphics, "mapsyncer.gui.settings.auto_sync", "mapsyncer.gui.settings.auto_sync.desc", x, y);
-        drawSetting(graphics, "mapsyncer.gui.settings.hud", "mapsyncer.gui.settings.hud.desc", x, y + 48);
-        drawSetting(graphics, "mapsyncer.gui.settings.delay", "mapsyncer.gui.settings.delay.desc", x, y + 96);
-        drawSetting(graphics, "mapsyncer.gui.settings.chat", "mapsyncer.gui.settings.chat.desc", x, y + 144);
-        graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.settings.server_limit_note"),
-                x, y + 188, panelWidth() - 56, 0xFFB9C3CC);
+        int x = contentLeft();
+        int y = settingsStartY();
+        int textWidth = Math.max(118, contentRight() - x - Math.min(130, Math.max(104, contentWidth() / 3)) - 12);
+        int rowGap = settingsRowGap();
+        drawSetting(graphics, "mapsyncer.gui.settings.auto_sync", "mapsyncer.gui.settings.auto_sync.desc", x, y, textWidth);
+        drawSetting(graphics, "mapsyncer.gui.settings.hud", "mapsyncer.gui.settings.hud.desc", x, y + rowGap, textWidth);
+        drawSetting(graphics, "mapsyncer.gui.settings.delay", "mapsyncer.gui.settings.delay.desc", x, y + rowGap * 2, textWidth);
+        drawSetting(graphics, "mapsyncer.gui.settings.chat", "mapsyncer.gui.settings.chat.desc", x, y + rowGap * 3, textWidth);
+        int noteY = y + rowGap * 4 + 4;
+        if (noteY + 24 < panelTop() + panelHeight()) {
+            graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.settings.server_limit_note"),
+                    x, noteY, contentWidth(), 0xFFB9C3CC);
+        }
     }
 
-    private void drawSetting(GuiGraphicsExtractor graphics, String titleKey, String descKey, int x, int y) {
+    private void drawSetting(GuiGraphicsExtractor graphics, String titleKey, String descKey, int x, int y, int textWidth) {
         graphics.text(font, Component.translatable(titleKey), x, y + 2, 0xFFE8F0F6, false);
-        graphics.textWithWordWrap(font, Component.translatable(descKey), x, y + 16, 278, 0xFF9BA8B5);
+        graphics.textWithWordWrap(font, Component.translatable(descKey), x, y + 16, textWidth, 0xFF9BA8B5);
     }
 
     private void updateDynamicButtons() {
@@ -370,11 +418,11 @@ public class MapSyncerScreen extends Screen {
     }
 
     private int panelWidth() {
-        return Math.min(PANEL_WIDTH, Math.max(320, width - 32));
+        return Math.min(PANEL_WIDTH, Math.max(1, width - 32));
     }
 
     private int panelHeight() {
-        return Math.min(PANEL_HEIGHT, Math.max(250, height - 32));
+        return Math.min(PANEL_HEIGHT, Math.max(1, height - 32));
     }
 
     private int panelLeft() {
@@ -383,6 +431,31 @@ public class MapSyncerScreen extends Screen {
 
     private int panelTop() {
         return Math.max(16, (height - panelHeight()) / 2);
+    }
+
+    private int panelMargin() {
+        int target = panelWidth() < 430 ? 20 : 28;
+        return Math.max(1, Math.min(target, panelWidth() / 8));
+    }
+
+    private int contentLeft() {
+        return panelLeft() + panelMargin();
+    }
+
+    private int contentRight() {
+        return panelLeft() + panelWidth() - panelMargin();
+    }
+
+    private int contentWidth() {
+        return contentRight() - contentLeft();
+    }
+
+    private int settingsStartY() {
+        return panelTop() + (panelHeight() < 250 ? 72 : 88);
+    }
+
+    private int settingsRowGap() {
+        return panelHeight() < 250 ? 40 : 48;
     }
 
     private enum Tab {
