@@ -10,6 +10,7 @@ import com.mapsyncer.util.DimensionPathMapping;
 import com.mapsyncer.util.HashUtils;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.commands.Commands;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
@@ -236,9 +237,59 @@ public class ServerSyncHandler {
         PayloadTypeRegistry.clientboundPlay().register(
                 PacketHandler.ServerInstalledPayload.TYPE,
                 PacketHandler.ServerInstalledPayload.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(
+                PacketHandler.AdminStatusRequestPayload.TYPE,
+                PacketHandler.AdminStatusRequestPayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(
+                PacketHandler.AdminStatusPayload.TYPE,
+                PacketHandler.AdminStatusPayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(
+                PacketHandler.OpenGuiPayload.TYPE,
+                PacketHandler.OpenGuiPayload.STREAM_CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(PacketHandler.SyncRequestPayload.TYPE,
                 (payload, context) -> handleSyncRequest(payload, context));
+        ServerPlayNetworking.registerGlobalReceiver(PacketHandler.AdminStatusRequestPayload.TYPE,
+                (payload, context) -> handleAdminStatusRequest(context));
+    }
+
+    private static void handleAdminStatusRequest(ServerPlayNetworking.Context context) {
+        ServerPlayer player = context.player();
+        player.level().getServer().execute(() -> sendAdminStatus(player));
+    }
+
+    private static void sendAdminStatus(ServerPlayer player) {
+        boolean allowed = Commands.LEVEL_OWNERS.check(player.permissions());
+        if (!allowed) {
+            ServerPlayNetworking.send(player, new PacketHandler.AdminStatusPayload(
+                    false, false, 0, 0, 0, 0, 0, 0, 0, 0L, 0,
+                    "permission_denied", "", ""));
+            return;
+        }
+
+        List<ConversionOrchestrator.DimensionCacheStats> cacheStats = ConversionOrchestrator.getCacheStats();
+        int cacheDimensionCount = cacheStats.size();
+        int cacheRegionCount = cacheStats.stream().mapToInt(ConversionOrchestrator.DimensionCacheStats::regionCount).sum();
+        long cacheSizeBytes = cacheStats.stream().mapToLong(ConversionOrchestrator.DimensionCacheStats::sizeBytes).sum();
+        ResourceKey<Level> currentDimension = ConversionOrchestrator.getCurrentDimension();
+        String currentDimensionId = currentDimension == null ? "" : currentDimension.identifier().toString();
+
+        ServerPlayNetworking.send(player, new PacketHandler.AdminStatusPayload(
+                true,
+                ConversionOrchestrator.isRunning(),
+                ConversionOrchestrator.getProcessedCount(),
+                ConversionOrchestrator.getTotalCount(),
+                ConversionOrchestrator.getUpdatedCount(),
+                ConversionOrchestrator.getSkippedCount(),
+                DirtyRegionTracker.dirtyCount(),
+                cacheDimensionCount,
+                cacheRegionCount,
+                cacheSizeBytes,
+                ModConfig.SERVER.syncSpeedLimitKBps,
+                ConversionOrchestrator.getStatus(),
+                currentDimensionId,
+                IncrementalUpdateHandler.getInstance().getStatusInfo()
+        ));
     }
 
     /**

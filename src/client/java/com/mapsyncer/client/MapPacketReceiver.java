@@ -122,6 +122,10 @@ public class MapPacketReceiver {
         return serverInstalled;
     }
 
+    public static String getServerVersion() {
+        return serverVersion;
+    }
+
     /**
      * 重置服务端安装状态（离开服务器时调用）
      */

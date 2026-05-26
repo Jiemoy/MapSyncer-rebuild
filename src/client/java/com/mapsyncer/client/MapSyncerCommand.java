@@ -75,10 +75,22 @@ public class MapSyncerCommand {
                                 .then(argument("dimension", StringArgumentType.greedyString())
                                         .suggests(MapSyncerCommand::suggestDimensions)
                                         .executes(MapSyncerCommand::executeSyncDimension)))
+                        .then(literal("gui")
+                                .executes(MapSyncerCommand::openGui))
                         .then(literal("clearstate")
                                 .requires(source -> false)
                                 .executes(MapSyncerCommand::clearSyncState))
         );
+        dispatcher.register(
+                literal("mapsyncergui")
+                        .executes(MapSyncerCommand::openGui)
+        );
+    }
+
+    private static int openGui(CommandContext<FabricClientCommandSource> context) {
+        Minecraft mc = context.getSource().getClient();
+        mc.execute(() -> mc.setScreen(new MapSyncerScreen()));
+        return Command.SINGLE_SUCCESS;
     }
 
     /**
@@ -96,6 +108,7 @@ public class MapSyncerCommand {
         mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_sync"));
         mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_sync_dim"));
         mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_sync_all"));
+        mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_gui"));
         mc.player.sendSystemMessage(ChatUtils.header("mapsyncer.command.help_dimension_note"));
 
         // 如果玩家有OP权限，显示服务端命令
@@ -259,8 +272,7 @@ public class MapSyncerCommand {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) return 0;
 
-        ResourceKey<Level> currentDim = mc.level.dimension();
-        String dimensionId = currentDim.identifier().toString();
+        String dimensionId = currentDimensionId(mc);
 
         sendSyncRequest(mc, dimensionId, false);
 
@@ -287,7 +299,15 @@ public class MapSyncerCommand {
      * @param level 客户端世界实例
      * @return 完整的维度 ID
      */
-    private static String resolveDimensionId(String input, ClientLevel level) {
+    static String currentDimensionId(Minecraft mc) {
+        if (mc.level == null) {
+            return "minecraft:overworld";
+        }
+        ResourceKey<Level> currentDim = mc.level.dimension();
+        return currentDim.identifier().toString();
+    }
+
+    static String resolveDimensionId(String input, ClientLevel level) {
         switch (input.toLowerCase()) {
             case "overworld": return "minecraft:overworld";
             case "nether": case "the_nether": return "minecraft:the_nether";

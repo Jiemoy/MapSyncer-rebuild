@@ -7,16 +7,19 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import com.mapsyncer.config.ModConfig;
 import com.mapsyncer.config.ModConfig.UpdateMode;
+import com.mapsyncer.network.PacketHandler;
 import com.mapsyncer.server.ConversionOrchestrator.DimensionCacheStats;
 import com.mapsyncer.server.ConversionOrchestrator.SingleRegionResult;
 import com.mapsyncer.util.ChatUtils;
 import com.mapsyncer.util.DimensionPathMapping;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.arguments.DimensionArgument;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.Level;
 
 import java.util.List;
@@ -48,6 +51,8 @@ public class CacheGenerateCommand {
                 .executes(CacheGenerateCommand::showHelp)
                 .then(Commands.literal("help")
                         .executes(CacheGenerateCommand::showHelp))
+                .then(Commands.literal("gui")
+                        .executes(CacheGenerateCommand::openGui))
                 .then(Commands.literal("generate")
                         .executes(CacheGenerateCommand::generateAll)
                         .then(Commands.argument("dimension", DimensionArgument.dimension())
@@ -60,6 +65,8 @@ public class CacheGenerateCommand {
                 .then(Commands.literal("status")
                         .executes(CacheGenerateCommand::showStatus))
                 .then(Commands.literal("incremental")
+                        .then(Commands.literal("run")
+                                .executes(CacheGenerateCommand::runIncrementalNow))
                         .then(Commands.literal("off")
                                 .executes(CacheGenerateCommand::setIncrementalOff))
                         .then(Commands.literal("tick")
@@ -76,6 +83,7 @@ public class CacheGenerateCommand {
 
     private static int showHelp(CommandContext<CommandSourceStack> ctx) {
         ctx.getSource().sendSuccess(() -> ChatUtils.prefix().append(ChatUtils.header("mapsyncer.help.server.header")), false);
+        ctx.getSource().sendSuccess(() -> ChatUtils.desc("mapsyncer.help.server.gui"), false);
         ctx.getSource().sendSuccess(() -> ChatUtils.desc("mapsyncer.help.server.generate"), false);
         ctx.getSource().sendSuccess(() -> ChatUtils.desc("mapsyncer.help.server.generate_dim"), false);
         ctx.getSource().sendSuccess(() -> ChatUtils.desc("mapsyncer.help.server.generate_region"), false);
@@ -84,6 +92,17 @@ public class CacheGenerateCommand {
         ctx.getSource().sendSuccess(() -> ChatUtils.desc("mapsyncer.help.server.incremental_off"), false);
         ctx.getSource().sendSuccess(() -> ChatUtils.desc("mapsyncer.help.server.incremental_tick"), false);
         ctx.getSource().sendSuccess(() -> ChatUtils.desc("mapsyncer.help.server.incremental_scheduled"), false);
+        ctx.getSource().sendSuccess(() -> ChatUtils.desc("mapsyncer.help.server.incremental_run"), false);
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int openGui(CommandContext<CommandSourceStack> ctx) throws CommandSyntaxException {
+        ServerPlayer player = ctx.getSource().getPlayerOrException();
+        if (!ServerPlayNetworking.canSend(player, PacketHandler.OpenGuiPayload.TYPE)) {
+            ctx.getSource().sendFailure(ChatUtils.error("mapsyncer.command.gui_client_missing"));
+            return 0;
+        }
+        ServerPlayNetworking.send(player, new PacketHandler.OpenGuiPayload());
         return Command.SINGLE_SUCCESS;
     }
 
@@ -264,6 +283,19 @@ public class CacheGenerateCommand {
                         stat.dimension(), stat.regionCount(), stat.sizeMB()), false);
             }
         }
+
+        return Command.SINGLE_SUCCESS;
+    }
+
+    private static int runIncrementalNow(CommandContext<CommandSourceStack> ctx) {
+        MinecraftServer server = ctx.getSource().getServer();
+        ctx.getSource().sendSuccess(() -> ChatUtils.message("mapsyncer.command.incremental_run_start"), false);
+
+        Thread worker = new Thread(() -> {
+            ConversionOrchestrator.performIncrementalScan(server);
+            ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.command.incremental_run_complete"), false);
+        }, "xaero-map-incremental");
+        worker.start();
 
         return Command.SINGLE_SUCCESS;
     }

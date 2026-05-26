@@ -40,6 +40,12 @@ public class PacketHandler {
     /** 服务端已安装通知包的资源定位符 */
     public static final Identifier SERVER_INSTALLED_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "server_installed");
+    public static final Identifier ADMIN_STATUS_REQUEST_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "admin_status_request");
+    public static final Identifier ADMIN_STATUS_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "admin_status");
+    public static final Identifier OPEN_GUI_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "open_gui");
 
     /**
      * 同步请求包 - 客户端发送各region的元数据（时间戳+哈希）
@@ -242,6 +248,107 @@ public class PacketHandler {
          */
         public static ServerInstalledPayload decode(RegistryFriendlyByteBuf buf) {
             return new ServerInstalledPayload(buf.readUtf());
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record AdminStatusRequestPayload() implements CustomPacketPayload {
+        public static final Type<AdminStatusRequestPayload> TYPE = new Type<>(ADMIN_STATUS_REQUEST_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, AdminStatusRequestPayload> STREAM_CODEC = StreamCodec.of(
+                AdminStatusRequestPayload::encode, AdminStatusRequestPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, AdminStatusRequestPayload payload) {
+        }
+
+        public static AdminStatusRequestPayload decode(RegistryFriendlyByteBuf buf) {
+            return new AdminStatusRequestPayload();
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record AdminStatusPayload(
+            boolean allowed,
+            boolean running,
+            int processed,
+            int total,
+            int updated,
+            int skipped,
+            int dirtyCount,
+            int cacheDimensionCount,
+            int cacheRegionCount,
+            long cacheSizeBytes,
+            int syncSpeedLimitKBps,
+            String status,
+            String currentDimension,
+            String incrementalStatus
+    ) implements CustomPacketPayload {
+        public static final Type<AdminStatusPayload> TYPE = new Type<>(ADMIN_STATUS_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, AdminStatusPayload> STREAM_CODEC = StreamCodec.of(
+                AdminStatusPayload::encode, AdminStatusPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, AdminStatusPayload payload) {
+            buf.writeBoolean(payload.allowed);
+            buf.writeBoolean(payload.running);
+            buf.writeInt(payload.processed);
+            buf.writeInt(payload.total);
+            buf.writeInt(payload.updated);
+            buf.writeInt(payload.skipped);
+            buf.writeInt(payload.dirtyCount);
+            buf.writeInt(payload.cacheDimensionCount);
+            buf.writeInt(payload.cacheRegionCount);
+            buf.writeLong(payload.cacheSizeBytes);
+            buf.writeInt(payload.syncSpeedLimitKBps);
+            buf.writeUtf(payload.status);
+            buf.writeUtf(payload.currentDimension);
+            buf.writeUtf(payload.incrementalStatus);
+        }
+
+        public static AdminStatusPayload decode(RegistryFriendlyByteBuf buf) {
+            return new AdminStatusPayload(
+                    buf.readBoolean(),
+                    buf.readBoolean(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readLong(),
+                    buf.readInt(),
+                    buf.readUtf(),
+                    buf.readUtf(),
+                    buf.readUtf()
+            );
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record OpenGuiPayload() implements CustomPacketPayload {
+        public static final Type<OpenGuiPayload> TYPE = new Type<>(OPEN_GUI_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, OpenGuiPayload> STREAM_CODEC = StreamCodec.of(
+                OpenGuiPayload::encode, OpenGuiPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, OpenGuiPayload payload) {
+        }
+
+        public static OpenGuiPayload decode(RegistryFriendlyByteBuf buf) {
+            return new OpenGuiPayload();
         }
 
         @Override
