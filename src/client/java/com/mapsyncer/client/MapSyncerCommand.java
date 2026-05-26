@@ -322,19 +322,37 @@ public class MapSyncerCommand {
      * @param dimensionId 维度 ID，如果是同步所有维度使用 "all"
      * @param syncAll 是否同步所有维度
      */
-    private static void sendSyncRequest(Minecraft mc, String dimensionId, boolean syncAll) {
+    static void sendSyncRequest(Minecraft mc, String dimensionId, boolean syncAll) {
+        Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
+        DimensionPathMapping dimMapping = DimensionPathMapping.getInstance();
+        String xaeroDim = syncAll ? null : dimMapping.toXaeroDimension(dimensionId);
+
+        CompletableFuture.supplyAsync(() -> prepareSyncRequest(serverDir, dimensionId, xaeroDim, syncAll))
+                .thenAccept(prepared -> mc.execute(() -> {
+                    if (mc.player == null) {
+                        return;
+                    }
+
+                    LOGGER.info("Sending sync request with {} entries (serverDir={})",
+                            prepared.metaMap().size(), serverDir);
+                    ClientPlayNetworking.send(new PacketHandler.SyncRequestPayload(prepared.metaMap()));
+                    SyncProgressTracker.startTracking();
+                }))
+                .exceptionally(error -> {
+                    LOGGER.error("Failed to prepare sync request", error);
+                    return null;
+                });
+    }
+
+    private static PreparedSyncRequest prepareSyncRequest(Path serverDir, String dimensionId,
+                                                          String xaeroDim, boolean syncAll) {
         Map<String, ClientMeta> metaMap;
 
         // 新流程：先发送请求，等服务端确认有数据后再暂停区块更新
         // 不在这里禁用区块更新，改为在收到服务端 status="ok" 后再暂停
 
-        Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
-
         ClientTimestampCache tsCache = serverDir != null && serverDir.toFile().exists()
                 ? ClientTimestampCache.getInstance(serverDir) : null;
-
-        DimensionPathMapping dimMapping = DimensionPathMapping.getInstance();
-        String xaeroDim = syncAll ? null : dimMapping.toXaeroDimension(dimensionId);
 
         if (syncAll) {
             if (serverDir != null && tsCache != null && tsCache.cacheFileExists()) {
@@ -363,8 +381,6 @@ public class MapSyncerCommand {
             }
         }
 
-        LOGGER.info("Sending sync request with {} entries (serverDir={})", metaMap.size(), serverDir);
-
         // 标记同步开始（用于断点续传检测）
         if (tsCache != null) {
             Set<String> dimensions = new HashSet<>();
@@ -377,8 +393,10 @@ public class MapSyncerCommand {
             tsCache.markSyncStart(dimensions, command);
         }
 
-        ClientPlayNetworking.send(new PacketHandler.SyncRequestPayload(metaMap));
-        SyncProgressTracker.startTracking();
+        return new PreparedSyncRequest(metaMap);
+    }
+
+    private record PreparedSyncRequest(Map<String, ClientMeta> metaMap) {
     }
 
     /**

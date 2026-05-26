@@ -45,6 +45,7 @@ public class SyncProgressTracker {
 
     /** 上次显示的百分比，用于避免重复显示 */
     private static volatile int lastDisplayedPercent = -1;
+    private static volatile long completedAt = 0;
 
     /** 是否收到第一次响应 */
     private static volatile boolean receivedFirstResponse = false;
@@ -68,6 +69,7 @@ public class SyncProgressTracker {
         total = 0;
         status = Component.translatable("mapsyncer.sync.waiting").getString();
         startTime = System.currentTimeMillis();
+        completedAt = 0;
         lastDisplayedPercent = -1;
         receivedFirstResponse = false;
 
@@ -133,8 +135,11 @@ public class SyncProgressTracker {
         // 每次进度更新都显示
         if (total > 0) {
             int percent = (processed * 100) / total;
-            lastDisplayedPercent = percent;
-            displayProgress();
+            int interval = ClientConfig.VALUES.syncProgressChatIntervalPercent;
+            if (interval > 0 && (lastDisplayedPercent < 0 || percent >= lastDisplayedPercent + interval || percent >= 100)) {
+                lastDisplayedPercent = percent;
+                displayProgress();
+            }
         }
     }
 
@@ -154,6 +159,7 @@ public class SyncProgressTracker {
      */
     public static void completeWithCount(int count) {
         tracking = false;
+        completedAt = System.currentTimeMillis();
         status = Component.translatable("mapsyncer.sync.completed", count, getElapsedSeconds()).getString();
         stopTimeoutChecker();
 
@@ -171,6 +177,7 @@ public class SyncProgressTracker {
      */
     public static void cancelTracking() {
         tracking = false;
+        completedAt = 0;
         status = Component.translatable("mapsyncer.sync.cancelled").getString();
         stopTimeoutChecker();
     }
@@ -220,6 +227,26 @@ public class SyncProgressTracker {
      */
     public static boolean isTracking() {
         return tracking;
+    }
+
+    public static int getProcessed() {
+        return processed;
+    }
+
+    public static int getTotal() {
+        return total;
+    }
+
+    public static String getStatus() {
+        return status;
+    }
+
+    public static int getPercent() {
+        return total > 0 ? Math.min(100, (processed * 100) / total) : 0;
+    }
+
+    public static long getCompletedAt() {
+        return completedAt;
     }
 
     /**

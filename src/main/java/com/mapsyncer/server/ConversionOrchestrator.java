@@ -24,7 +24,9 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Stream;
 
 /**
@@ -709,6 +711,14 @@ public class ConversionOrchestrator {
         GenerationCache genCache = GenerationCache.getInstance(CACHE_DIR);
         int totalUpdated = 0;
         long generationTimeSeconds = System.currentTimeMillis() / 1000;
+        List<DirtyRegionTracker.DirtyRegion> dirtySnapshot = ModConfig.SERVER.enableDirtyRegionTracking
+                ? DirtyRegionTracker.takeSnapshot(ModConfig.SERVER.maxDirtyRegionsPerIncrementalRun)
+                : List.of();
+        boolean useDirtySnapshot = !dirtySnapshot.isEmpty();
+        if (useDirtySnapshot) {
+            LOGGER.info("Incremental update using {} dirty regions ({} still queued)",
+                    dirtySnapshot.size(), DirtyRegionTracker.dirtyCount());
+        }
 
         for (DimensionRegions dimRegions : allRegions) {
             ServerLevel level = server.getLevel(dimRegions.dimension());
@@ -754,8 +764,20 @@ public class ConversionOrchestrator {
                 caveParams = CaveModeParams.NONE;
             }
 
-            // Scan for regions that need update
-            java.util.List<RegionCoords> needsUpdate = mcaCache.scanAndUpdate(dimPath, regionDir);
+            Set<DirtyRegionTracker.DirtyRegion> dirtyForDimension = new LinkedHashSet<>();
+            java.util.List<RegionCoords> needsUpdate = new ArrayList<>();
+            if (useDirtySnapshot) {
+                Set<RegionCoords> uniqueCoords = new LinkedHashSet<>();
+                for (DirtyRegionTracker.DirtyRegion dirty : dirtySnapshot) {
+                    if (dirty.matches(dimRegions.dimension())) {
+                        dirtyForDimension.add(dirty);
+                        uniqueCoords.add(dirty.toRegionCoords());
+                    }
+                }
+                needsUpdate.addAll(uniqueCoords);
+            } else if (ModConfig.SERVER.dirtyRegionFallbackFullScan) {
+                needsUpdate = mcaCache.scanAndUpdate(dimPath, regionDir);
+            }
 
             if (needsUpdate.isEmpty()) {
                 LOGGER.debug("No updates needed for dimension {}", dimPath);
@@ -774,7 +796,10 @@ public class ConversionOrchestrator {
 
             for (RegionCoords coords : needsUpdate) {
                 Path mcaPath = regionDir.resolve("r." + coords.x() + "." + coords.z() + ".mca");
-                if (!Files.exists(mcaPath)) continue;
+                if (!Files.exists(mcaPath)) {
+                    markDirtyProcessed(dirtyForDimension, coords);
+                    continue;
+                }
 
                 ConvertedRegion converted = RegionConverterStandalone.convertRegion(
                     mcaPath, coords.x(), coords.z(), dimTypeInfo, lightMode, caveParams);
@@ -794,6 +819,7 @@ public class ConversionOrchestrator {
                         genCache.updateWithHash(relativePath, outputFile, generationTimeSeconds);
 
                         totalUpdated++;
+                        markDirtyProcessed(dirtyForDimension, coords);
                         LOGGER.debug("Incrementally updated region ({}, {}) in {} (layer={})", coords.x(), coords.z(), dimPath, caveLayer == Integer.MAX_VALUE ? "surface" : caveLayer);
                     } catch (IOException e) {
                         LOGGER.error("Failed to write region file during incremental update", e);
@@ -806,6 +832,18 @@ public class ConversionOrchestrator {
             LOGGER.info("Incremental scan completed: {} regions updated", totalUpdated);
             mcaCache.saveCache();
             genCache.save();
+        }
+    }
+
+    private static void markDirtyProcessed(Set<DirtyRegionTracker.DirtyRegion> dirtyRegions, RegionCoords coords) {
+        if (dirtyRegions == null || dirtyRegions.isEmpty()) {
+            return;
+        }
+
+        for (DirtyRegionTracker.DirtyRegion dirty : dirtyRegions) {
+            if (dirty.regionX() == coords.x() && dirty.regionZ() == coords.z()) {
+                DirtyRegionTracker.markProcessed(dirty);
+            }
         }
     }
 

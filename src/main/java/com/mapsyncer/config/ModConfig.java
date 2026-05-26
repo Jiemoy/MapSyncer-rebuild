@@ -2,6 +2,7 @@ package com.mapsyncer.config;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import com.google.gson.JsonObject;
 import com.mapsyncer.MapSyncer;
 import com.mapsyncer.mca.DimensionTypeInfo;
 import net.fabricmc.loader.api.FabricLoader;
@@ -35,12 +36,24 @@ public class ModConfig {
         if (Files.exists(CONFIG_PATH)) {
             try {
                 String json = Files.readString(CONFIG_PATH);
-                ServerConfig loaded = GSON.fromJson(json, ServerConfig.class);
+                JsonObject root = GSON.fromJson(json, JsonObject.class);
+                ServerConfig loaded = GSON.fromJson(root, ServerConfig.class);
                 if (loaded != null) {
                     SERVER.copyFrom(loaded);
                 }
+                if (root != null) {
+                    if (!root.has("enableDirtyRegionTracking")) {
+                        SERVER.enableDirtyRegionTracking = true;
+                    }
+                    if (!root.has("dirtyRegionFallbackFullScan")) {
+                        SERVER.dirtyRegionFallbackFullScan = true;
+                    }
+                    if (!root.has("maxDirtyRegionsPerIncrementalRun")) {
+                        SERVER.maxDirtyRegionsPerIncrementalRun = 512;
+                    }
+                }
                 MapSyncer.LOGGER.info("Loaded config from {}", CONFIG_PATH);
-            } catch (IOException e) {
+            } catch (Exception e) {
                 MapSyncer.LOGGER.error("Failed to load config, using defaults", e);
             }
         } else {
@@ -132,6 +145,9 @@ public class ModConfig {
         public int incrementalUpdateIntervalTicks = 200; // 10 seconds
         public int scheduledUpdateHour = 4;
         public int scheduledUpdateMinute = 0;
+        public boolean enableDirtyRegionTracking = true;
+        public boolean dirtyRegionFallbackFullScan = true;
+        public int maxDirtyRegionsPerIncrementalRun = 512;
 
         // Dimension scan settings
         public ScanMode defaultScanMode = ScanMode.SURFACE;
@@ -151,13 +167,19 @@ public class ModConfig {
             this.maxConcurrentRegions = other.maxConcurrentRegions;
             this.maxSyncPacketSize = other.maxSyncPacketSize;
             this.syncSpeedLimitKBps = other.syncSpeedLimitKBps;
-            this.incrementalUpdateMode = other.incrementalUpdateMode;
+            this.incrementalUpdateMode = other.incrementalUpdateMode != null
+                    ? other.incrementalUpdateMode : UpdateMode.DISABLED;
             this.incrementalUpdateIntervalTicks = other.incrementalUpdateIntervalTicks;
             this.scheduledUpdateHour = other.scheduledUpdateHour;
             this.scheduledUpdateMinute = other.scheduledUpdateMinute;
-            this.defaultScanMode = other.defaultScanMode;
+            this.enableDirtyRegionTracking = other.enableDirtyRegionTracking;
+            this.dirtyRegionFallbackFullScan = other.dirtyRegionFallbackFullScan;
+            this.maxDirtyRegionsPerIncrementalRun = other.maxDirtyRegionsPerIncrementalRun > 0
+                    ? other.maxDirtyRegionsPerIncrementalRun : 512;
+            this.defaultScanMode = other.defaultScanMode != null ? other.defaultScanMode : ScanMode.SURFACE;
             this.defaultCaveStart = other.defaultCaveStart;
-            this.dimensionConfigs = other.dimensionConfigs;
+            this.dimensionConfigs = other.dimensionConfigs != null && !other.dimensionConfigs.isEmpty()
+                    ? other.dimensionConfigs : getDefaultDimensionConfigStrings();
         }
 
         public List<DimensionScanConfig> parseDimensionConfigs() {

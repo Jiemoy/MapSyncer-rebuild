@@ -128,6 +128,7 @@ public class MapPacketReceiver {
     public static void resetServerStatus() {
         serverInstalled = false;
         serverVersion = "";
+        AutoSyncManager.reset();
     }
 
     public static void handleServerInstalled(PacketHandler.ServerInstalledPayload payload,
@@ -135,6 +136,7 @@ public class MapPacketReceiver {
         serverInstalled = true;
         serverVersion = payload.version();
         LOGGER.info("Server has MapSyncer installed, version: {}", serverVersion);
+        AutoSyncManager.onServerInstalled();
     }
 
     /**
@@ -168,6 +170,7 @@ public class MapPacketReceiver {
             // 根据状态决定处理方式
             if ("no_cache".equals(status) || "dim_not_available".equals(status)) {
                 LOGGER.info("Server returned error status: {}, no sync needed", status);
+                SyncProgressTracker.cancelTracking();
                 clearSyncData();
                 clearReflectionCache();
                 if (tsCache != null) {
@@ -178,6 +181,7 @@ public class MapPacketReceiver {
 
             if ("uptodate".equals(status)) {
                 LOGGER.info("Map is up-to-date, no sync needed");
+                SyncProgressTracker.completeWithCount(0);
                 clearSyncData();
                 clearReflectionCache();
                 if (tsCache != null) {
@@ -188,6 +192,7 @@ public class MapPacketReceiver {
 
             // status == "ok"，有数据需要同步
             if (isSyncStale()) {
+                SyncProgressTracker.cancelTracking();
                 clearSyncData();
                 clearReflectionCache();
                 LOGGER.warn("Sync was stale, cleared accumulated data");
@@ -267,6 +272,7 @@ public class MapPacketReceiver {
                         tsCache.markSyncComplete();
                     }
                 } else {
+                    SyncProgressTracker.completeWithCount(totalReceived);
                     resumeChunkUpdates();
                     LOGGER.info("Sync complete with no data received");
                     if (tsCache != null) {
@@ -288,7 +294,8 @@ public class MapPacketReceiver {
      * @param context 数据包上下文
      */
     public static void handleSyncProgress(PacketHandler.SyncProgressPayload payload, ClientPlayNetworking.Context context) {
-        SyncProgressTracker.update(payload.processed(), payload.total(), payload.status());
+        context.client().execute(() ->
+                SyncProgressTracker.update(payload.processed(), payload.total(), payload.status()));
     }
 
     /**
