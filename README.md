@@ -86,6 +86,11 @@ config/mapsyncer-client.json
 - `syncProgressChatIntervalPercent`：聊天栏进度提示间隔，默认 `0`
 - `autoSyncDelaySeconds`：自动同步延迟秒数，默认 `3`
 
+同步性能：
+
+- 服务端按 `maxSyncPacketSize` 分包，并按 `syncSpeedLimitKBps` 限速发送；玩家同步时卡顿，优先降低 `syncSpeedLimitKBps`
+- 客户端会在后台写入地图文件、计算哈希和保存同步缓存；当前视距内的 Xaero 地图刷新会按 tick 节流，避免一次性刷新大量 region
+
 服务端缓存目录：
 
 ```text

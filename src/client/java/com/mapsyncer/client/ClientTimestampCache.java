@@ -7,7 +7,6 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
@@ -140,9 +139,9 @@ public class ClientTimestampCache {
     /**
      * 重置实例。
      */
-    public static void resetInstance() {
+    public static synchronized void resetInstance() {
         if (instance != null) {
-            instance.cache.clear();
+            instance.clearInMemory();
             instance = null;
             lastBaseDir = null;
             LOGGER.info("ClientTimestampCache instance reset");
@@ -196,7 +195,7 @@ public class ClientTimestampCache {
     /**
      * 保存缓存到文件（包含状态和区域时间戳）。
      */
-    public void save() {
+    public synchronized void save() {
         try {
             Files.createDirectories(cacheFile.getParent());
 
@@ -245,7 +244,7 @@ public class ClientTimestampCache {
     /**
      * 标记同步开始。
      */
-    public void markSyncStart(Set<String> dimensions, String command) {
+    public synchronized void markSyncStart(Set<String> dimensions, String command) {
         syncState = SYNC_STATE_IN_PROGRESS;
         syncDimensions = new HashSet<>(dimensions);
         syncCommand = command;
@@ -256,7 +255,7 @@ public class ClientTimestampCache {
     /**
      * 标记同步完成。
      */
-    public void markSyncComplete() {
+    public synchronized void markSyncComplete() {
         syncState = SYNC_STATE_COMPLETED;
         save();
         LOGGER.info("Marked sync complete");
@@ -265,7 +264,7 @@ public class ClientTimestampCache {
     /**
      * 清除同步状态（用户忽略断点续传提示时调用）。
      */
-    public void clearSyncState() {
+    public synchronized void clearSyncState() {
         syncState = SYNC_STATE_COMPLETED;
         syncDimensions.clear();
         syncCommand = "";
@@ -276,42 +275,42 @@ public class ClientTimestampCache {
     /**
      * 获取当前同步状态。
      */
-    public String getSyncState() {
+    public synchronized String getSyncState() {
         return syncState;
     }
 
     /**
      * 获取同步指令。
      */
-    public String getSyncCommand() {
+    public synchronized String getSyncCommand() {
         return syncCommand;
     }
 
     /**
      * 检查是否需要断点续传。
      */
-    public boolean needsResume() {
+    public synchronized boolean needsResume() {
         return SYNC_STATE_IN_PROGRESS.equals(syncState);
     }
 
     /**
      * 获取同步涉及的维度集合。
      */
-    public Set<String> getSyncDimensions() {
+    public synchronized Set<String> getSyncDimensions() {
         return new HashSet<>(syncDimensions);
     }
 
     /**
      * 更新区域的缓存信息。
      */
-    public void update(String relativePath, long timestampSeconds, String hash) {
+    public synchronized void update(String relativePath, long timestampSeconds, String hash) {
         cache.put(relativePath, new CacheEntry(timestampSeconds, hash));
     }
 
     /**
      * 获取区域的缓存信息。
      */
-    public CacheEntry get(String relativePath) {
+    public synchronized CacheEntry get(String relativePath) {
         return cache.get(relativePath);
     }
 
@@ -321,18 +320,15 @@ public class ClientTimestampCache {
      * <p>返回不可修改视图，避免创建完整副本浪费内存。</p>
      * <p>如果需要修改数据，请使用 update() 方法。</p>
      */
-    public Map<String, CacheEntry> getAll() {
-        return Collections.unmodifiableMap(cache);
+    public synchronized Map<String, CacheEntry> getAll() {
+        return new HashMap<>(cache);
     }
 
     /**
      * 清空缓存数据。
      */
-    public void clear() {
-        cache.clear();
-        syncState = null;
-        syncDimensions.clear();
-        syncCommand = "";
+    public synchronized void clear() {
+        clearInMemory();
         try {
             Files.deleteIfExists(cacheFile);
             LOGGER.info("Cleared cache");
@@ -341,10 +337,17 @@ public class ClientTimestampCache {
         }
     }
 
+    private void clearInMemory() {
+        cache.clear();
+        syncState = null;
+        syncDimensions.clear();
+        syncCommand = "";
+    }
+
     /**
      * 检查指定维度是否已同步过。
      */
-    public boolean hasDimensionSynced(String xaeroDim) {
+    public synchronized boolean hasDimensionSynced(String xaeroDim) {
         String prefix = xaeroDim + "/";
         for (String key : cache.keySet()) {
             if (key.startsWith(prefix)) {

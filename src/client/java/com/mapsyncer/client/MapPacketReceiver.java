@@ -11,11 +11,19 @@ import net.minecraft.world.level.Level;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.nio.file.Path;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * 地图数据包接收器。
@@ -61,18 +69,39 @@ public class MapPacketReceiver {
     /** 陈旧同步超时时间（10分钟） */
     private static final long STALE_SYNC_TIMEOUT_MS = 10 * 60 * 1000;
 
+    /** 客户端同步写盘线程，避免网络包处理和文件 IO 阻塞客户端主线程。 */
+    private static final ExecutorService SYNC_WORKER = Executors.newSingleThreadExecutor(r -> {
+        Thread thread = new Thread(r, "mapsyncer-client-sync-worker");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    /** 每 tick 最多刷新多少个 Xaero region，避免同步时集中反射刷新导致掉帧。 */
+    private static final int MAX_REGION_LOADS_PER_TICK = 1;
+
+    /** 等待在客户端主线程触发 Xaero 刷新的 region 队列。 */
+    private static final ConcurrentLinkedQueue<PendingRegionLoad> pendingRegionLoads = new ConcurrentLinkedQueue<>();
+
+    /** 用于丢弃断线、取消或新同步开始后遗留的旧同步任务。 */
+    private static final AtomicLong syncGeneration = new AtomicLong();
+
+    private static volatile boolean completionPending = false;
+    private static volatile int completionRegionCount = 0;
+
     /** 同步期间更新的区域坐标集合（仅存储坐标，不存储数据，节省内存） */
-    private static volatile Set<XaeroMapIntegrator.RegionCoord> updatedRegionCoords = new HashSet<>();
+    private static final Set<XaeroMapIntegrator.RegionCoord> updatedRegionCoords = ConcurrentHashMap.newKeySet();
 
     /** 已加载的区域集合（避免重复加载） */
-    private static volatile Set<XaeroMapIntegrator.RegionCoord> loadedRegions = new HashSet<>();
+    private static final Set<XaeroMapIntegrator.RegionCoord> loadedRegions = ConcurrentHashMap.newKeySet();
 
     /** 反射 API 缓存（避免重复反射调用开销） */
     private static volatile Object cachedMapProcessor = null;
     private static volatile Object cachedMapSaveLoad = null;
     private static volatile Method cachedGetLeafMapRegion = null;
     private static volatile Method cachedRequestLoad = null;
-    private static volatile java.lang.reflect.Field cachedLoadStateField = null;
+    private static volatile Field cachedLoadStateField = null;
+    private static volatile Field cachedShouldCacheField = null;
+    private static volatile Method cachedSetHasHadTerrain = null;
     private static volatile Method cachedCancelRefresh = null;
 
     /** 反射 API 是否已初始化 */
@@ -96,9 +125,14 @@ public class MapPacketReceiver {
      * 在同步中断或变得陈旧时调用。
      */
     public static void clearSyncData() {
+        syncGeneration.incrementAndGet();
         syncInProgress = false;
         lastMwDir = null;
         syncStartTime = 0;
+        completionPending = false;
+        completionRegionCount = 0;
+        pendingRegionLoads.clear();
+        loadedRegions.clear();
         clearReceivedChunks();
         LOGGER.info("Cleared sync data to prevent memory leak");
     }
@@ -108,9 +142,7 @@ public class MapPacketReceiver {
      * 在同步完成、中断或服务器停止时调用。
      */
     public static void clearReceivedChunks() {
-        if (updatedRegionCoords != null) {
-            updatedRegionCoords.clear();
-        }
+        updatedRegionCoords.clear();
     }
 
     /**
@@ -133,6 +165,8 @@ public class MapPacketReceiver {
         serverInstalled = false;
         serverVersion = "";
         AutoSyncManager.reset();
+        clearSyncData();
+        clearReflectionCache();
     }
 
     public static void handleServerInstalled(PacketHandler.ServerInstalledPayload payload,
@@ -166,10 +200,7 @@ public class MapPacketReceiver {
 
             LOGGER.debug("Received sync response: status={}, chunks={}, isComplete={}", status, chunks.size(), payload.isComplete());
 
-            // 获取时间戳缓存用于同步状态管理
             Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
-            ClientTimestampCache tsCache = serverDir != null && serverDir.toFile().exists()
-                    ? ClientTimestampCache.getInstance(serverDir) : null;
 
             // 根据状态决定处理方式
             if ("no_cache".equals(status) || "dim_not_available".equals(status)) {
@@ -177,9 +208,7 @@ public class MapPacketReceiver {
                 SyncProgressTracker.cancelTracking();
                 clearSyncData();
                 clearReflectionCache();
-                if (tsCache != null) {
-                    tsCache.clearSyncState();
-                }
+                clearSyncStateOnWorker(serverDir);
                 return;
             }
 
@@ -188,9 +217,7 @@ public class MapPacketReceiver {
                 SyncProgressTracker.completeWithCount(0);
                 clearSyncData();
                 clearReflectionCache();
-                if (tsCache != null) {
-                    tsCache.markSyncComplete();
-                }
+                markSyncCompleteOnWorker(serverDir);
                 return;
             }
 
@@ -209,8 +236,14 @@ public class MapPacketReceiver {
             // 首次收到数据时初始化反射缓存
             if (!syncInProgress) {
                 syncInProgress = true;
-                // 不再使用全局暂停，边接收边加载
-                LOGGER.info("Starting sync (streaming mode)");
+                syncStartTime = System.currentTimeMillis();
+                long generation = syncGeneration.incrementAndGet();
+                updatedRegionCoords.clear();
+                loadedRegions.clear();
+                pendingRegionLoads.clear();
+                completionPending = false;
+                completionRegionCount = 0;
+                LOGGER.info("Starting sync (background streaming mode, generation={})", generation);
                 initializeReflectionCache();
             }
 
@@ -218,75 +251,31 @@ public class MapPacketReceiver {
             // 注意：视距判断需要使用 chunk 的 caveLayer，而不是默认的地表层
             Minecraft mc = Minecraft.getInstance();
             boolean isCaveDimension = mc.level != null && mc.level.dimension() == Level.NETHER;
-
-            // 流式处理：写入后立即处理
+            String currentXaeroDim = mc.level != null
+                    ? DimensionPathMapping.getInstance().toXaeroDimension(mc.level.dimension().identifier().toString())
+                    : null;
+            Map<Integer, Set<XaeroMapIntegrator.RegionCoord>> viewRegionsByLayer = new HashMap<>();
             for (ChunkMapData chunk : chunks) {
-                XaeroMapIntegrator.RegionCoord coord = new XaeroMapIntegrator.RegionCoord(
-                    chunk.regionX, chunk.regionZ, chunk.caveLayer);
-                updatedRegionCoords.add(coord);
-
-                // 写入文件
-                Path mwDir = XaeroMapIntegrator.writeChunkDataAndGetMwDir(chunk, serverWorldId);
-                if (mwDir != null) {
-                    lastMwDir = mwDir;
-                }
-
-                // 根据维度类型决定处理哪个层
                 boolean shouldProcess = isCaveDimension
-                    ? (chunk.caveLayer != Integer.MAX_VALUE)  // 地狱：洞穴层
-                    : (chunk.caveLayer == Integer.MAX_VALUE); // 主世界/末地：地表层
-
-                // 判断是否在视距内 - 使用 chunk 的 caveLayer 进行判断
-                Set<XaeroMapIntegrator.RegionCoord> viewRegionsForLayer =
-                    XaeroMapIntegrator.getViewDistanceRegions(chunk.caveLayer);
-                boolean inViewDistance = viewRegionsForLayer.contains(coord);
-
-                if (shouldProcess) {
-                    // 清除缓存文件并立即触发加载
-                    clearSingleRegionCache(coord);
-                    triggerSingleRegionLoad(coord, chunk.caveLayer, inViewDistance);
-                    LOGGER.debug("区域 ({}, {}) layer={} inView={} 已清除缓存并触发加载",
-                        coord.x(), coord.z(), chunk.caveLayer, inViewDistance);
-                }
-
-                // 更新时间戳缓存
-                if (tsCache != null) {
-                    String relativePath = buildRelativePathForCache(chunk);
-                    String hash = HashUtils.computeHash(chunk.data);
-                    tsCache.update(relativePath, chunk.timestampSeconds, hash);
+                    ? (chunk.caveLayer != Integer.MAX_VALUE)
+                    : (chunk.caveLayer == Integer.MAX_VALUE);
+                if (shouldProcess && currentXaeroDim != null && currentXaeroDim.equals(chunk.dimension)) {
+                    viewRegionsByLayer.computeIfAbsent(chunk.caveLayer, XaeroMapIntegrator::getViewDistanceRegions);
                 }
             }
 
-            // 保存时间戳缓存
-            if (tsCache != null && !chunks.isEmpty()) {
-                tsCache.save();
-            }
-
-            // 同步完成时处理
-            if (payload.isComplete()) {
-                int totalReceived = updatedRegionCoords.size();
-                LOGGER.info("同步完成: 总计 {} 个区域已处理", totalReceived);
-
-                if (!updatedRegionCoords.isEmpty()) {
-                    XaeroMapIntegrator.recordUpdatedRegionCoords(updatedRegionCoords);
-                    SyncProgressTracker.completeWithCount(totalReceived);
-
-                    resumeChunkUpdates();
-                    if (tsCache != null) {
-                        tsCache.markSyncComplete();
-                    }
-                } else {
-                    SyncProgressTracker.completeWithCount(totalReceived);
-                    resumeChunkUpdates();
-                    LOGGER.info("Sync complete with no data received");
-                    if (tsCache != null) {
-                        tsCache.markSyncComplete();
-                    }
-                }
-
-                clearSyncState();
-                clearReflectionCache();
-            }
+            long generation = syncGeneration.get();
+            List<ChunkMapData> chunkSnapshot = List.copyOf(chunks);
+            SYNC_WORKER.execute(() -> processSyncResponseOnWorker(
+                    context.client(),
+                    chunkSnapshot,
+                    payload.isComplete(),
+                    serverWorldId,
+                    serverDir,
+                    isCaveDimension,
+                    currentXaeroDim,
+                    viewRegionsByLayer,
+                    generation));
         });
     }
 
@@ -311,12 +300,175 @@ public class MapPacketReceiver {
         LOGGER.info("Sync complete");
     }
 
+    private static void processSyncResponseOnWorker(Minecraft client,
+            List<ChunkMapData> chunks,
+            boolean isComplete,
+            int serverWorldId,
+            Path serverDir,
+            boolean isCaveDimension,
+            String currentXaeroDim,
+            Map<Integer, Set<XaeroMapIntegrator.RegionCoord>> viewRegionsByLayer,
+            long generation) {
+        if (generation != syncGeneration.get()) {
+            return;
+        }
+
+        try {
+            boolean cacheDirty = false;
+            ClientTimestampCache tsCache = getTimestampCacheOnWorker(serverDir);
+
+            for (ChunkMapData chunk : chunks) {
+                if (generation != syncGeneration.get()) {
+                    return;
+                }
+
+                XaeroMapIntegrator.RegionCoord coord = new XaeroMapIntegrator.RegionCoord(
+                        chunk.regionX, chunk.regionZ, chunk.caveLayer);
+                updatedRegionCoords.add(coord);
+
+                Path mwDir = null;
+                if (serverDir != null) {
+                    mwDir = XaeroMapIntegrator.writeChunkDataAndGetMwDir(chunk, serverDir, serverWorldId);
+                    if (mwDir != null) {
+                        lastMwDir = mwDir;
+                    }
+                } else {
+                    LOGGER.warn("Skipping map write because server directory is unavailable");
+                }
+
+                if (tsCache != null) {
+                    String relativePath = buildRelativePathForCache(chunk);
+                    String hash = HashUtils.computeHash(chunk.data);
+                    tsCache.update(relativePath, chunk.timestampSeconds, hash);
+                    cacheDirty = true;
+                }
+
+                boolean shouldProcess = isCaveDimension
+                    ? (chunk.caveLayer != Integer.MAX_VALUE)
+                    : (chunk.caveLayer == Integer.MAX_VALUE);
+                if (mwDir != null) {
+                    clearSingleRegionCache(coord, mwDir);
+                }
+                if (shouldProcess && mwDir != null
+                        && currentXaeroDim != null && currentXaeroDim.equals(chunk.dimension)) {
+                    Set<XaeroMapIntegrator.RegionCoord> viewRegionsForLayer = viewRegionsByLayer.get(chunk.caveLayer);
+                    boolean inViewDistance = viewRegionsForLayer != null && viewRegionsForLayer.contains(coord);
+                    if (inViewDistance) {
+                        pendingRegionLoads.offer(new PendingRegionLoad(coord, chunk.caveLayer, true, generation));
+                        LOGGER.debug("Queued region ({}, {}) layer={} for throttled Xaero reload",
+                                coord.x(), coord.z(), chunk.caveLayer);
+                    } else {
+                        LOGGER.debug("Region ({}, {}) layer={} written; Xaero reload deferred until needed",
+                                coord.x(), coord.z(), chunk.caveLayer);
+                    }
+                }
+            }
+
+            if (tsCache != null && cacheDirty) {
+                tsCache.save();
+            }
+
+            if (isComplete) {
+                int totalReceived = updatedRegionCoords.size();
+                if (tsCache != null) {
+                    tsCache.markSyncComplete();
+                }
+
+                client.execute(() -> {
+                    if (generation != syncGeneration.get()) {
+                        return;
+                    }
+                    completionRegionCount = totalReceived;
+                    completionPending = true;
+                    tryCompleteSyncOnClient(generation);
+                });
+            }
+        } catch (Exception e) {
+            LOGGER.error("Failed to process sync response on background worker", e);
+            client.execute(() -> {
+                if (generation != syncGeneration.get()) {
+                    return;
+                }
+                SyncProgressTracker.cancelTracking();
+                clearSyncData();
+                clearReflectionCache();
+            });
+        }
+    }
+
+    private static ClientTimestampCache getTimestampCacheOnWorker(Path serverDir) {
+        return serverDir != null && serverDir.toFile().exists()
+                ? ClientTimestampCache.getInstance(serverDir)
+                : null;
+    }
+
+    private static void markSyncCompleteOnWorker(Path serverDir) {
+        SYNC_WORKER.execute(() -> {
+            ClientTimestampCache tsCache = getTimestampCacheOnWorker(serverDir);
+            if (tsCache != null) {
+                tsCache.markSyncComplete();
+            }
+        });
+    }
+
+    private static void clearSyncStateOnWorker(Path serverDir) {
+        SYNC_WORKER.execute(() -> {
+            ClientTimestampCache tsCache = getTimestampCacheOnWorker(serverDir);
+            if (tsCache != null) {
+                tsCache.clearSyncState();
+            }
+        });
+    }
+
+    public static void onClientTick(Minecraft client) {
+        long generation = syncGeneration.get();
+        int processed = 0;
+
+        while (processed < MAX_REGION_LOADS_PER_TICK) {
+            PendingRegionLoad pending = pendingRegionLoads.poll();
+            if (pending == null) {
+                break;
+            }
+            if (pending.generation() != generation) {
+                continue;
+            }
+
+            triggerSingleRegionLoad(pending.coord(), pending.caveLayer(), pending.inViewDistance());
+            processed++;
+        }
+
+        tryCompleteSyncOnClient(generation);
+    }
+
+    private static void tryCompleteSyncOnClient(long generation) {
+        if (!completionPending || generation != syncGeneration.get() || !pendingRegionLoads.isEmpty()) {
+            return;
+        }
+
+        int totalReceived = completionRegionCount;
+        LOGGER.info("同步完成: 总计 {} 个区域已处理", totalReceived);
+
+        if (!updatedRegionCoords.isEmpty()) {
+            XaeroMapIntegrator.recordUpdatedRegionCoords(new HashSet<>(updatedRegionCoords));
+        } else {
+            LOGGER.info("Sync complete with no data received");
+        }
+
+        SyncProgressTracker.completeWithCount(totalReceived);
+        resumeChunkUpdates();
+        clearSyncState();
+        clearReflectionCache();
+    }
+
     /**
      * 清理同步状态（非反射缓存）。
      */
     private static void clearSyncState() {
         updatedRegionCoords.clear();
         loadedRegions.clear();
+        pendingRegionLoads.clear();
+        completionPending = false;
+        completionRegionCount = 0;
         lastMwDir = null;
         syncStartTime = 0;
     }
@@ -331,6 +483,8 @@ public class MapPacketReceiver {
         cachedGetLeafMapRegion = null;
         cachedRequestLoad = null;
         cachedLoadStateField = null;
+        cachedShouldCacheField = null;
+        cachedSetHasHadTerrain = null;
         cachedCancelRefresh = null;
     }
 
@@ -379,6 +533,11 @@ public class MapPacketReceiver {
             cachedLoadStateField = mapRegionClass.getDeclaredField("loadState");
             cachedLoadStateField.setAccessible(true);
             cachedCancelRefresh = mapRegionClass.getMethod("cancelRefresh", mapProcessorClass);
+            cachedSetHasHadTerrain = mapRegionClass.getMethod("setHasHadTerrain");
+
+            Class<?> leveledRegionClass = Class.forName("xaero.map.region.LeveledRegion");
+            cachedShouldCacheField = leveledRegionClass.getDeclaredField("shouldCache");
+            cachedShouldCacheField.setAccessible(true);
 
             reflectionInitialized = true;
 
@@ -425,47 +584,21 @@ public class MapPacketReceiver {
                 return;
             }
 
-            // 调试：检查 region 的属性是否正确
-            Class<?> leveledRegionClass = Class.forName("xaero.map.region.LeveledRegion");
-            java.lang.reflect.Field worldIdField = leveledRegionClass.getDeclaredField("worldId");
-            java.lang.reflect.Field dimIdField = leveledRegionClass.getDeclaredField("dimId");
-            java.lang.reflect.Field mwIdField = leveledRegionClass.getDeclaredField("mwId");
-            worldIdField.setAccessible(true);
-            dimIdField.setAccessible(true);
-            mwIdField.setAccessible(true);
-            String regionWorldId = (String) worldIdField.get(mapRegion);
-            String regionDimId = (String) dimIdField.get(mapRegion);
-            String regionMwId = (String) mwIdField.get(mapRegion);
-            LOGGER.info("Region ({}, {}) 属性: worldId={}, dimId={}, mwId={}, lastMwDir={}",
-                coord.x(), coord.z(), regionWorldId, regionDimId, regionMwId, lastMwDir);
-
             // 清除 refresh 状态
             cachedCancelRefresh.invoke(mapRegion, cachedMapProcessor);
 
-            // 获取 MapRegion 类（用于 setHasHadTerrain）
-            Class<?> mapRegionClass = Class.forName("xaero.map.region.MapRegion");
-
             // 设置 shouldCache=true，确保完整加载条件满足
-            java.lang.reflect.Field shouldCacheField = leveledRegionClass.getDeclaredField("shouldCache");
-            shouldCacheField.setAccessible(true);
-            shouldCacheField.setBoolean(mapRegion, true);
+            cachedShouldCacheField.setBoolean(mapRegion, true);
 
             // 关键：设置 hasHadTerrain=true，否则 loadCacheTextures 会直接返回元数据
             // 如果 hasHadTerrain=false，加载时会跳过完整数据加载
-            java.lang.reflect.Method setHasHadTerrainMethod = mapRegionClass.getMethod("setHasHadTerrain");
-            setHasHadTerrainMethod.invoke(mapRegion);
+            cachedSetHasHadTerrain.invoke(mapRegion);
 
-            if (inViewDistance) {
-                // 视距内：使用 requestLoad(prioritize=true) 插入队头，优先加载
-                cachedLoadStateField.setByte(mapRegion, (byte) 4);
-                cachedRequestLoad.invoke(cachedMapSaveLoad, mapRegion, "sync view", true);
-                LOGGER.info("区域 ({}, {}) layer={} 视距内，插入队头优先加载", coord.x(), coord.z(), caveLayer);
-            } else {
-                // 视距外：使用 requestLoad(prioritize=true) 强制添加到队列
-                cachedLoadStateField.setByte(mapRegion, (byte) 4);
-                cachedRequestLoad.invoke(cachedMapSaveLoad, mapRegion, "sync outside", true);
-                LOGGER.info("区域 ({}, {}) layer={} 视距外，添加到加载队列", coord.x(), coord.z(), caveLayer);
-            }
+            cachedLoadStateField.setByte(mapRegion, (byte) 4);
+            cachedRequestLoad.invoke(cachedMapSaveLoad, mapRegion,
+                    inViewDistance ? "sync view" : "sync deferred", inViewDistance);
+            LOGGER.debug("Queued Xaero reload for region ({}, {}) layer={} inView={}",
+                    coord.x(), coord.z(), caveLayer, inViewDistance);
 
             loadedRegions.add(coord);
 
@@ -481,10 +614,14 @@ public class MapPacketReceiver {
      * @param coord 区域坐标
      */
     private static void clearSingleRegionCache(XaeroMapIntegrator.RegionCoord coord) {
-        if (lastMwDir == null) return;
+        clearSingleRegionCache(coord, lastMwDir);
+    }
+
+    private static void clearSingleRegionCache(XaeroMapIntegrator.RegionCoord coord, Path mwDir) {
+        if (mwDir == null) return;
 
         String cacheFileName = coord.x() + "_" + coord.z() + ".xwmc";
-        List<Path> cacheDirs = findCacheDirectories(lastMwDir);
+        List<Path> cacheDirs = findCacheDirectories(mwDir);
 
         for (Path cacheDir : cacheDirs) {
             Path cacheFile = cacheDir.resolve(cacheFileName);
@@ -498,6 +635,12 @@ public class MapPacketReceiver {
                 return;
             }
         }
+    }
+
+    private record PendingRegionLoad(XaeroMapIntegrator.RegionCoord coord,
+                                     int caveLayer,
+                                     boolean inViewDistance,
+                                     long generation) {
     }
 
     /**

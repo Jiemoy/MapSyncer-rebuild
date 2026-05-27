@@ -3,6 +3,7 @@ package com.mapsyncer.client;
 import com.mapsyncer.network.PacketHandler;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import org.slf4j.Logger;
@@ -16,6 +17,7 @@ public class MapSyncerClient implements ClientModInitializer {
         ClientConfig.load();
         SyncHudOverlay.register();
         MapSyncerKeybinds.register();
+        ClientTickEvents.END_CLIENT_TICK.register(MapPacketReceiver::onClientTick);
 
         ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) ->
                 MapSyncerCommand.register(dispatcher));
