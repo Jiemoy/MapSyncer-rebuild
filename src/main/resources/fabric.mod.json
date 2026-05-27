@@ -27,6 +27,7 @@
 		"fabric-api": ">=${fabric_api_version}"
 	},
 	"suggests": {
-		"xaeroworldmap": "*"
+		"xaeroworldmap": "*",
+		"voxy": "*"
 	}
 }

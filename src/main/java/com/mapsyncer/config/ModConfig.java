@@ -41,16 +41,27 @@ public class ModConfig {
                 if (loaded != null) {
                     SERVER.copyFrom(loaded);
                 }
+                boolean needsSave = false;
                 if (root != null) {
+                    if (!root.has("enableVoxySync")) {
+                        SERVER.enableVoxySync = false;
+                        needsSave = true;
+                    }
                     if (!root.has("enableDirtyRegionTracking")) {
                         SERVER.enableDirtyRegionTracking = true;
+                        needsSave = true;
                     }
                     if (!root.has("dirtyRegionFallbackFullScan")) {
                         SERVER.dirtyRegionFallbackFullScan = true;
+                        needsSave = true;
                     }
                     if (!root.has("maxDirtyRegionsPerIncrementalRun")) {
                         SERVER.maxDirtyRegionsPerIncrementalRun = 512;
+                        needsSave = true;
                     }
+                }
+                if (needsSave) {
+                    save();
                 }
                 MapSyncer.LOGGER.info("Loaded config from {}", CONFIG_PATH);
             } catch (Exception e) {
@@ -139,6 +150,8 @@ public class ModConfig {
         public int maxConcurrentRegions = 4;
         public int maxSyncPacketSize = 262144; // 256KB
         public int syncSpeedLimitKBps = 1024; // 1MB/s
+        // Sends raw MCA files to clients when enabled. Keep disabled unless players are trusted.
+        public boolean enableVoxySync = false;
 
         // Incremental update settings
         public UpdateMode incrementalUpdateMode = UpdateMode.DISABLED;
@@ -167,6 +180,7 @@ public class ModConfig {
             this.maxConcurrentRegions = other.maxConcurrentRegions;
             this.maxSyncPacketSize = other.maxSyncPacketSize;
             this.syncSpeedLimitKBps = other.syncSpeedLimitKBps;
+            this.enableVoxySync = other.enableVoxySync;
             this.incrementalUpdateMode = other.incrementalUpdateMode != null
                     ? other.incrementalUpdateMode : UpdateMode.DISABLED;
             this.incrementalUpdateIntervalTicks = other.incrementalUpdateIntervalTicks;

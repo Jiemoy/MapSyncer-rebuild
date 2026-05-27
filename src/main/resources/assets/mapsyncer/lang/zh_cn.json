@@ -7,7 +7,6 @@
   "mapsyncer.sync.timeout": "同步超时，请重试",
   "mapsyncer.sync.server_not_installed": "服务端未安装 MapSyncer",
   "mapsyncer.sync.unloading_regions": "正在卸载视距内 %d 个区域以准备更新",
-
   "mapsyncer.command.no_map_dir": "无法确定地图目录，是否已经连接到服务器？",
   "mapsyncer.command.sync_dimension": "开始同步维度：%s",
   "mapsyncer.command.sync_all": "开始同步所有维度...",
@@ -19,15 +18,12 @@
   "mapsyncer.command.help_sync_dim": "/mapsyncer sync <维度> - 同步指定维度",
   "mapsyncer.command.help_sync_all": "/mapsyncer sync all - 同步所有维度",
   "mapsyncer.command.help_dimension_note": "维度名称：overworld、the_nether、the_end，或完整 ID，如 twilightforest:twilight_forest",
-
   "mapsyncer.cache.all_cleared": "所有缓存已清除，无需重新加载",
   "mapsyncer.cache.direct_reload": "直接重新加载：%d 个区域",
   "mapsyncer.cache.reload_failed": "触发地图重新加载失败",
   "mapsyncer.cache.status": "缓存：%d 已清除，%d 需要重新加载",
   "mapsyncer.cache.cleared": "缓存已清除",
-
   "mapsyncer.prefix": "[MapSyncer]",
-
   "mapsyncer.help.server.header": "服务端命令帮助：",
   "mapsyncer.help.server.generate": "/mapsyncer generate - 为所有维度生成地图缓存",
   "mapsyncer.help.server.generate_dim": "/mapsyncer generate <维度> - 为指定维度生成缓存（增量）",
@@ -38,29 +34,23 @@
   "mapsyncer.help.server.incremental_off": "/mapsyncer incremental off - 禁用增量更新",
   "mapsyncer.help.server.incremental_tick": "/mapsyncer incremental tick [间隔] - 设置 TICK 模式",
   "mapsyncer.help.server.incremental_scheduled": "/mapsyncer incremental scheduled [小时] [分钟] - 设置定时模式",
-
   "mapsyncer.chunk.paused": "区块更新已暂停...",
   "mapsyncer.chunk.resumed": "区块更新已恢复",
-
   "mapsyncer.sync.dimension_not_available": "维度 %s 的地图尚未生成或维度不存在，请联系管理员执行生成命令",
-
   "mapsyncer.command.unknown_dimension": "未知维度：%s",
   "mapsyncer.command.region_not_found": "区域（%d, %d）在维度 %s 中不存在，请确认坐标是否正确",
   "mapsyncer.command.generating_region": "开始生成区域（%d, %d），维度：%s...",
   "mapsyncer.command.region_converted": "区域转换完成",
   "mapsyncer.command.region_conversion_failed": "区域（%d, %d）转换失败",
-
   "mapsyncer.command.incremental_disabled": "增量更新已禁用",
   "mapsyncer.command.incremental_tick_set": "增量更新已设置为 TICK 模式（间隔：%d ticks = %.1f 秒）",
   "mapsyncer.command.incremental_tick_interval": "增量更新已设置为 TICK 模式，间隔 %d ticks（%.1f 秒）",
   "mapsyncer.command.incremental_scheduled_set": "增量更新已设置为定时模式（每日 %02d:%02d）",
-
   "mapsyncer.server.no_cache": "地图缓存不可用，请先运行 /mapsyncer generate",
   "mapsyncer.server.dim_not_available": "维度 '%s' 的地图数据不可用，请先运行 /mapsyncer generate %s",
   "mapsyncer.server.map_uptodate": "地图已是最新，%d 个哈希匹配，%d 个时间戳跳过",
   "mapsyncer.server.sync_start": "开始地图同步：需要下载 %d 个区域（%d 个相同，%d 个客户端较新已跳过）",
   "mapsyncer.server.sync_complete": "地图同步完成：已发送 %d 个区域",
-
   "mapsyncer.generate.start_full": "开始全量地图生成...",
   "mapsyncer.generate.full_complete": "地图生成完成：%d/%d 个区域，已完成 %d 个维度：%s",
   "mapsyncer.generate.start_dim": "开始生成维度地图：%s",
@@ -76,7 +66,6 @@
   "mapsyncer.status.scheduled_mode": "增量更新：定时模式，每日 %02d:%02d",
   "mapsyncer.status.cache_total": "缓存统计：共 %d 个维度，%d 个区域，占用 %.1f MB",
   "mapsyncer.status.cache_dim": "  %s：%d 个区域，%.1f MB",
-
   "mapsyncer.sync.resume_header": "可继续未完成的同步",
   "mapsyncer.sync.resume_prompt": "上次同步已中断，点击下方继续同步：",
   "mapsyncer.sync.resume_button": "继续同步",
@@ -129,9 +118,34 @@
   "mapsyncer.gui.settings.delay.desc": "进入服务器后等待多久再发起自动同步。",
   "mapsyncer.gui.settings.chat": "聊天进度间隔",
   "mapsyncer.gui.settings.chat.desc": "0 表示不在聊天栏刷百分比进度。",
-  "mapsyncer.gui.settings.server_limit_note": "网络同步限速由服务器配置 config/mapsyncer.json 控制，客户端 GUI 只读显示。",
+  "mapsyncer.gui.settings.server_limit_note": "网络同步限速由服务端配置 config/mapsyncer.json 控制，客户端 GUI 只读显示。",
   "mapsyncer.gui.settings.on": "开",
   "mapsyncer.gui.settings.off": "关",
   "mapsyncer.gui.settings.seconds": "%d 秒",
-  "mapsyncer.gui.settings.percent": "%d%%"
+  "mapsyncer.gui.settings.percent": "%d%%",
+  "mapsyncer.gui.voxy.sync_current": "同步 Voxy 当前维度",
+  "mapsyncer.gui.voxy.status": "Voxy 状态：%s",
+  "mapsyncer.gui.voxy.progress": "Voxy 进度：%d/%d（%d%%）",
+  "mapsyncer.gui.voxy.note": "注：Voxy 同步基于服务端最近一次落盘保存；刚放置的方块可能需要等服务器自动保存后才会出现。",
+  "mapsyncer.gui.voxy.requesting": "正在请求服务端 Voxy 同步...",
+  "mapsyncer.gui.voxy.downloading": "正在下载 Voxy region 文件...",
+  "mapsyncer.gui.voxy.importing": "正在交给 Voxy 导入...",
+  "mapsyncer.gui.voxy.import_started": "Voxy 导入已开始",
+  "mapsyncer.gui.voxy.reason.enabled": "可用",
+  "mapsyncer.gui.voxy.reason.not_installed": "未检测到 Voxy",
+  "mapsyncer.gui.voxy.reason.not_enabled": "Voxy 未启用或尚未就绪",
+  "mapsyncer.gui.voxy.reason.server_disabled": "服务端未开启 Voxy 同步",
+  "mapsyncer.gui.voxy.reason.no_connection": "当前没有服务器连接",
+  "mapsyncer.gui.voxy.reason.syncing": "已有同步正在进行",
+  "mapsyncer.gui.voxy.reason.busy": "服务端正在处理你的 Voxy 同步",
+  "mapsyncer.gui.voxy.reason.unknown": "等待服务端状态",
+  "mapsyncer.gui.voxy.reason.region_dir_missing": "服务端找不到当前维度 region 目录",
+  "mapsyncer.gui.voxy.reason.dimension_changed": "维度已切换，本次同步已中断",
+  "mapsyncer.gui.voxy.reason.interrupted": "同步已中断",
+  "mapsyncer.gui.voxy.reason.failed": "同步失败",
+  "mapsyncer.gui.voxy.reason.completed": "已是最新或同步完成",
+  "mapsyncer.gui.voxy.reason.client_io_failed": "客户端写入临时文件失败",
+  "mapsyncer.gui.voxy.reason.import_busy": "Voxy 正在导入其他数据",
+  "mapsyncer.gui.voxy.reason.import_failed": "Voxy 导入启动失败",
+  "mapsyncer.gui.voxy.reason.sending": "服务端正在发送数据"
 }

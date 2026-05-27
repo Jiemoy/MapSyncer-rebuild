@@ -1,5 +1,6 @@
 package com.mapsyncer.client;
 
+import com.mapsyncer.client.voxy.VoxySyncClient;
 import com.mapsyncer.network.PacketHandler;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
@@ -18,6 +19,7 @@ public class MapSyncerScreen extends Screen {
     private Tab activeTab = Tab.SYNC;
     private Button syncCurrentButton;
     private Button syncAllButton;
+    private Button voxyButton;
     private Button autoSyncButton;
     private Button hudButton;
     private Button delayValueButton;
@@ -95,6 +97,9 @@ public class MapSyncerScreen extends Screen {
             case ADMIN -> buildAdminWidgets(panelLeft, panelTop);
             case SETTINGS -> buildSettingsWidgets(panelLeft, panelTop);
         }
+        if (activeTab == Tab.SYNC && MapPacketReceiver.isServerInstalled()) {
+            VoxySyncClient.requestCapability();
+        }
         updateDynamicButtons();
     }
 
@@ -113,7 +118,7 @@ public class MapSyncerScreen extends Screen {
 
     private void buildSyncWidgets(int panelLeft, int panelTop) {
         int x = contentLeft();
-        int y = panelTop + 122;
+        int y = syncButtonY();
         int gap = 10;
         int buttonWidth = Math.max(1, (contentWidth() - gap) / 2);
         syncCurrentButton = addRenderableWidget(Button.builder(
@@ -124,6 +129,10 @@ public class MapSyncerScreen extends Screen {
                 Component.translatable("mapsyncer.gui.sync.all"),
                 b -> MapSyncerCommand.sendSyncRequest(Minecraft.getInstance(), "all", true)
         ).bounds(x + buttonWidth + gap, y, buttonWidth, 22).build());
+        voxyButton = addRenderableWidget(Button.builder(
+                Component.translatable("mapsyncer.gui.voxy.sync_current"),
+                b -> VoxySyncClient.startCurrentDimensionSync(Minecraft.getInstance())
+        ).bounds(x, y + 28, contentWidth(), 22).build());
     }
 
     private void buildAdminWidgets(int panelLeft, int panelTop) {
@@ -264,16 +273,15 @@ public class MapSyncerScreen extends Screen {
 
     private void drawSyncTab(GuiGraphicsExtractor graphics) {
         int x = contentLeft();
-        int y = panelTop() + 72;
+        int y = syncTextY();
         boolean installed = MapPacketReceiver.isServerInstalled();
         Component serverStatus = installed
                 ? Component.translatable("mapsyncer.gui.sync.server_installed", MapPacketReceiver.getServerVersion())
                 : Component.translatable("mapsyncer.gui.sync.server_missing");
         graphics.text(font, Component.translatable("mapsyncer.gui.sync.dimension", currentDimensionId()), x, y, 0xFFE8F0F6, false);
         graphics.text(font, serverStatus, x, y + 16, installed ? 0xFF8CE99A : 0xFFFFC857, false);
-        graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.sync.tip"), x, y + 88, contentWidth(), 0xFFB9C3CC);
 
-        int barY = y + 52;
+        int barY = syncBarY();
         int barWidth = contentWidth();
         int percent = visibleSyncPercent();
         graphics.text(font, Component.translatable("mapsyncer.gui.sync.progress",
@@ -283,6 +291,38 @@ public class MapSyncerScreen extends Screen {
         graphics.outline(x, barY, barWidth, 8, 0xFF6B7785);
         if (!SyncProgressTracker.getStatus().isBlank()) {
             graphics.text(font, Component.literal(SyncProgressTracker.getStatus()), x, barY + 14, 0xFFB9C3CC, false);
+        }
+
+        int voxyY = syncVoxyY();
+        String voxyReason = VoxySyncClient.getUnavailableReason(minecraft);
+        Component voxyReasonText = switch (voxyReason) {
+            case "" -> Component.translatable("mapsyncer.gui.voxy.reason.enabled");
+            case "not_installed", "not_enabled", "server_disabled", "no_connection", "syncing",
+                    "busy", "unknown", "region_dir_missing", "dimension_changed", "interrupted",
+                    "failed", "completed", "client_io_failed", "import_busy", "import_failed",
+                    "sending" -> Component.translatable("mapsyncer.gui.voxy.reason." + voxyReason);
+            default -> Component.literal(voxyReason);
+        };
+        Component voxyStatus = Component.translatable("mapsyncer.gui.voxy.status", voxyReasonText.getString());
+        drawSingleLine(graphics, voxyStatus, x, voxyY, contentWidth(), voxyReason.isBlank() ? 0xFF8CE99A : 0xFFB9C3CC);
+
+        int voxyPercent = visibleVoxyPercent();
+        graphics.text(font, Component.translatable("mapsyncer.gui.voxy.progress",
+                VoxySyncClient.getProcessedRegions(), VoxySyncClient.getTotalRegions(), voxyPercent),
+                x, voxyY + 14, 0xFFE8F0F6, false);
+        graphics.fill(x, voxyY + 28, x + barWidth, voxyY + 36, 0xFF2E3740);
+        graphics.fill(x, voxyY + 28, x + (barWidth * voxyPercent) / 100, voxyY + 36, 0xFFB089FF);
+        graphics.outline(x, voxyY + 28, barWidth, 8, 0xFF6B7785);
+
+        String voxyText = VoxySyncClient.getDisplayStatus();
+        if (!voxyText.isBlank() && voxyY + 52 <= panelTop() + panelHeight() - 4) {
+            drawSingleLine(graphics, Component.literal(voxyText), x, voxyY + 42, contentWidth(), 0xFFB9C3CC);
+        }
+
+        int noteY = voxyY + 58;
+        if (panelHeight() >= 270 && noteY + 18 <= panelTop() + panelHeight() - 8) {
+            graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.voxy.note"),
+                    x, noteY, contentWidth(), 0xFF9BA8B5);
         }
     }
 
@@ -343,6 +383,18 @@ public class MapSyncerScreen extends Screen {
         graphics.textWithWordWrap(font, Component.translatable(descKey), x, y + 16, textWidth, 0xFF9BA8B5);
     }
 
+    private void drawSingleLine(GuiGraphicsExtractor graphics, Component text, int x, int y, int maxWidth, int color) {
+        String value = text.getString();
+        if (font.width(value) <= maxWidth) {
+            graphics.text(font, text, x, y, color, false);
+            return;
+        }
+        String ellipsis = "...";
+        int limit = Math.max(1, maxWidth - font.width(ellipsis));
+        String trimmed = font.plainSubstrByWidth(value, limit) + ellipsis;
+        graphics.text(font, Component.literal(trimmed), x, y, color, false);
+    }
+
     private void updateDynamicButtons() {
         boolean canSync = minecraft != null && minecraft.player != null && minecraft.level != null
                 && MapPacketReceiver.isServerInstalled() && !MapPacketReceiver.isSyncInProgress();
@@ -351,6 +403,12 @@ public class MapSyncerScreen extends Screen {
         }
         if (syncAllButton != null) {
             syncAllButton.active = canSync;
+        }
+        if (voxyButton != null) {
+            if (MapPacketReceiver.isServerInstalled()) {
+                VoxySyncClient.requestCapability();
+            }
+            voxyButton.active = VoxySyncClient.canStart(minecraft);
         }
         boolean canAdminAction = isOwner() && minecraft != null && minecraft.player != null;
         if (incrementalButton != null) {
@@ -388,6 +446,17 @@ public class MapSyncerScreen extends Screen {
             return SyncProgressTracker.getPercent();
         }
         long completedAt = SyncProgressTracker.getCompletedAt();
+        if (completedAt > 0 && System.currentTimeMillis() - completedAt <= COMPLETE_VISIBLE_MS) {
+            return 100;
+        }
+        return 0;
+    }
+
+    private int visibleVoxyPercent() {
+        if (VoxySyncClient.isSyncing()) {
+            return VoxySyncClient.getPercent();
+        }
+        long completedAt = VoxySyncClient.getCompletedAt();
         if (completedAt > 0 && System.currentTimeMillis() - completedAt <= COMPLETE_VISIBLE_MS) {
             return 100;
         }
@@ -456,6 +525,22 @@ public class MapSyncerScreen extends Screen {
 
     private int settingsRowGap() {
         return panelHeight() < 250 ? 40 : 48;
+    }
+
+    private int syncTextY() {
+        return panelTop() + (panelHeight() < 270 ? 66 : 72);
+    }
+
+    private int syncButtonY() {
+        return panelTop() + (panelHeight() < 270 ? 94 : 104);
+    }
+
+    private int syncBarY() {
+        return syncButtonY() + (panelHeight() < 270 ? 54 : 60);
+    }
+
+    private int syncVoxyY() {
+        return syncBarY() + (panelHeight() < 270 ? 34 : 32);
     }
 
     private enum Tab {

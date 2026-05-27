@@ -31,6 +31,7 @@
 - Fabric API
 - MapSyncer
 - Xaero's World Map
+- Voxy（可选，仅用于 Voxy 同步按钮）
 
 服务端不需要安装 Xaero's World Map。
 
@@ -65,6 +66,20 @@
 /mapsyncer incremental scheduled [hour] [minute] # 按每天固定时间执行自动增量更新
 ```
 
+## Voxy 同步
+
+GUI 会自动检测客户端是否安装并启用 Voxy。只有客户端有 Voxy、服务端开启 `enableVoxySync`、且当前没有其他同步任务时，“同步 Voxy 当前维度”按钮才可点击。
+
+**重要安全警告：** `enableVoxySync` 默认是 `false`。开启后，服务端会把当前维度的完整 MCA region 文件发给客户端，不会清洗 NBT；这可能暴露箱子内容、方块实体、实体、矿物和隐藏结构。只建议在信任玩家的建筑服或生电服开启。
+
+Voxy 同步只同步玩家当前所在维度，并读取服务端最近一次已经落盘的存档；刚放置的方块可能需要等服务器自动保存后才会出现在 Voxy 中。
+
+客户端 Voxy 增量缓存保存在：
+
+```text
+mapsyncer/voxy-sync-cache.json
+```
+
 ## 配置
 
 服务端配置：
@@ -85,6 +100,13 @@ config/mapsyncer-client.json
 - `showSyncHud`：显示同步 HUD，默认 `true`
 - `syncProgressChatIntervalPercent`：聊天栏进度提示间隔，默认 `0`
 - `autoSyncDelaySeconds`：自动同步延迟秒数，默认 `3`
+
+服务端关键配置：
+
+- `enableVoxySync`：是否允许 Voxy MCA 同步，默认 `false`
+- `maxSyncPacketSize`：同步分包大小
+- `syncSpeedLimitKBps`：同步限速；客户端同步时卡顿可优先降低这个值
+- `enableDirtyRegionTracking`：是否启用 DirtyRegion 精准增量，默认 `true`
 
 同步性能：
 

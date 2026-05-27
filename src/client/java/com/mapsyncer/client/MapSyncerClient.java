@@ -1,5 +1,6 @@
 package com.mapsyncer.client;
 
+import com.mapsyncer.client.voxy.VoxySyncClient;
 import com.mapsyncer.network.PacketHandler;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
@@ -29,7 +30,10 @@ public class MapSyncerClient implements ClientModInitializer {
                 (payload, context) -> MapPacketReceiver.handleSyncProgress(payload, context));
 
         ClientPlayNetworking.registerGlobalReceiver(PacketHandler.ServerInstalledPayload.TYPE,
-                (payload, context) -> MapPacketReceiver.handleServerInstalled(payload, context));
+                (payload, context) -> {
+                    MapPacketReceiver.handleServerInstalled(payload, context);
+                    context.client().execute(VoxySyncClient::requestCapability);
+                });
 
         ClientPlayNetworking.registerGlobalReceiver(PacketHandler.AdminStatusPayload.TYPE,
                 (payload, context) -> AdminStatusClientState.handle(payload, context));
@@ -38,11 +42,29 @@ public class MapSyncerClient implements ClientModInitializer {
                 (payload, context) -> context.client().execute(() ->
                         context.client().setScreen(new MapSyncerScreen())));
 
-        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) ->
-                ClientJoinHandler.onClientJoin(client));
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.VoxyCapabilityPayload.TYPE,
+                VoxySyncClient::handleCapability);
+
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.VoxySyncStartPayload.TYPE,
+                VoxySyncClient::handleStart);
+
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.VoxyRegionPartPayload.TYPE,
+                VoxySyncClient::handlePart);
+
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.VoxySyncProgressPayload.TYPE,
+                VoxySyncClient::handleProgress);
+
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.VoxySyncCompletePayload.TYPE,
+                VoxySyncClient::handleComplete);
+
+        ClientPlayConnectionEvents.JOIN.register((handler, sender, client) -> {
+            ClientJoinHandler.onClientJoin(client);
+            client.execute(VoxySyncClient::requestCapability);
+        });
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             AdminStatusClientState.reset();
+            VoxySyncClient.reset();
             ClientJoinHandler.onClientDisconnect(client);
         });
 

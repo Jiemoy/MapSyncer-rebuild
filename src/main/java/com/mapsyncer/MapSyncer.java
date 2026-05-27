@@ -8,6 +8,7 @@ import com.mapsyncer.server.DirtyRegionTracker;
 import com.mapsyncer.server.IncrementalUpdateHandler;
 import com.mapsyncer.server.PlayerJoinHandler;
 import com.mapsyncer.server.ServerSyncHandler;
+import com.mapsyncer.server.VoxySyncHandler;
 import net.fabricmc.api.ModInitializer;
 import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -31,6 +32,8 @@ public class MapSyncer implements ModInitializer {
 
         ModConfig.load();
         ServerSyncHandler.register();
+        VoxySyncHandler.register();
+        VoxySyncHandler.logSecurityWarningIfEnabled();
 
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
                 CacheGenerateCommand.register(dispatcher));
@@ -46,6 +49,7 @@ public class MapSyncer implements ModInitializer {
 
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> {
             IncrementalUpdateHandler.getInstance().stop();
+            VoxySyncHandler.cleanup();
             DirtyRegionTracker.clear();
         });
 

@@ -299,7 +299,7 @@ public class MapSyncerCommand {
      * @param level 客户端世界实例
      * @return 完整的维度 ID
      */
-    static String currentDimensionId(Minecraft mc) {
+    public static String currentDimensionId(Minecraft mc) {
         if (mc.level == null) {
             return "minecraft:overworld";
         }

@@ -61,6 +61,7 @@ public class PlayerJoinHandler {
      */
     public static void onPlayerLeave(ServerPlayer player) {
         ServerSyncHandler.onPlayerDisconnect(player.getUUID());
+        VoxySyncHandler.onPlayerDisconnect(player.getUUID());
     }
 
     /**
@@ -82,6 +83,7 @@ public class PlayerJoinHandler {
 
         // Clear sync tracking data
         ServerSyncHandler.cleanup();
+        VoxySyncHandler.cleanup();
 
         LOGGER.info("Singleton cache cleanup completed");
     }
@@ -117,5 +119,6 @@ public class PlayerJoinHandler {
 
         // 检查并清理离线玩家的残留状态
         ServerSyncHandler.cleanupOfflinePlayers(onlinePlayerIds);
+        VoxySyncHandler.cleanupOfflinePlayers(onlinePlayerIds);
     }
 }

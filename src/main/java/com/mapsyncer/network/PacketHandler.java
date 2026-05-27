@@ -1,7 +1,6 @@
 package com.mapsyncer.network;
 
 import com.mapsyncer.MapSyncer;
-import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -46,6 +45,20 @@ public class PacketHandler {
             MapSyncer.MOD_ID, "admin_status");
     public static final Identifier OPEN_GUI_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "open_gui");
+    public static final Identifier VOXY_CAPABILITY_REQUEST_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "voxy_capability_request");
+    public static final Identifier VOXY_CAPABILITY_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "voxy_capability");
+    public static final Identifier VOXY_SYNC_REQUEST_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "voxy_sync_request");
+    public static final Identifier VOXY_SYNC_START_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "voxy_sync_start");
+    public static final Identifier VOXY_REGION_PART_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "voxy_region_part");
+    public static final Identifier VOXY_SYNC_PROGRESS_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "voxy_sync_progress");
+    public static final Identifier VOXY_SYNC_COMPLETE_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "voxy_sync_complete");
 
     /**
      * 同步请求包 - 客户端发送各region的元数据（时间戳+哈希）
@@ -349,6 +362,206 @@ public class PacketHandler {
 
         public static OpenGuiPayload decode(RegistryFriendlyByteBuf buf) {
             return new OpenGuiPayload();
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record VoxyCapabilityRequestPayload() implements CustomPacketPayload {
+        public static final Type<VoxyCapabilityRequestPayload> TYPE = new Type<>(VOXY_CAPABILITY_REQUEST_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, VoxyCapabilityRequestPayload> STREAM_CODEC = StreamCodec.of(
+                VoxyCapabilityRequestPayload::encode, VoxyCapabilityRequestPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, VoxyCapabilityRequestPayload payload) {
+        }
+
+        public static VoxyCapabilityRequestPayload decode(RegistryFriendlyByteBuf buf) {
+            return new VoxyCapabilityRequestPayload();
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record VoxyCapabilityPayload(boolean enabled, String reason) implements CustomPacketPayload {
+        public static final Type<VoxyCapabilityPayload> TYPE = new Type<>(VOXY_CAPABILITY_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, VoxyCapabilityPayload> STREAM_CODEC = StreamCodec.of(
+                VoxyCapabilityPayload::encode, VoxyCapabilityPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, VoxyCapabilityPayload payload) {
+            buf.writeBoolean(payload.enabled);
+            buf.writeUtf(payload.reason);
+        }
+
+        public static VoxyCapabilityPayload decode(RegistryFriendlyByteBuf buf) {
+            return new VoxyCapabilityPayload(buf.readBoolean(), buf.readUtf());
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record VoxyRegionMeta(long timestampSeconds, long sizeBytes) {
+        public static void encode(RegistryFriendlyByteBuf buf, VoxyRegionMeta meta) {
+            buf.writeLong(meta.timestampSeconds);
+            buf.writeLong(meta.sizeBytes);
+        }
+
+        public static VoxyRegionMeta decode(RegistryFriendlyByteBuf buf) {
+            return new VoxyRegionMeta(buf.readLong(), buf.readLong());
+        }
+    }
+
+    public record VoxySyncRequestPayload(String dimensionId, Map<String, VoxyRegionMeta> clientMeta) implements CustomPacketPayload {
+        public static final Type<VoxySyncRequestPayload> TYPE = new Type<>(VOXY_SYNC_REQUEST_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, VoxySyncRequestPayload> STREAM_CODEC = StreamCodec.of(
+                VoxySyncRequestPayload::encode, VoxySyncRequestPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, VoxySyncRequestPayload payload) {
+            buf.writeUtf(payload.dimensionId);
+            buf.writeInt(payload.clientMeta.size());
+            for (var entry : payload.clientMeta.entrySet()) {
+                buf.writeUtf(entry.getKey());
+                VoxyRegionMeta.encode(buf, entry.getValue());
+            }
+        }
+
+        public static VoxySyncRequestPayload decode(RegistryFriendlyByteBuf buf) {
+            String dimensionId = buf.readUtf();
+            int size = buf.readInt();
+            Map<String, VoxyRegionMeta> metaMap = new HashMap<>();
+            for (int i = 0; i < size; i++) {
+                metaMap.put(buf.readUtf(), VoxyRegionMeta.decode(buf));
+            }
+            return new VoxySyncRequestPayload(dimensionId, metaMap);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record VoxySyncStartPayload(String syncId, String dimensionId, int totalRegions, long totalBytes) implements CustomPacketPayload {
+        public static final Type<VoxySyncStartPayload> TYPE = new Type<>(VOXY_SYNC_START_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, VoxySyncStartPayload> STREAM_CODEC = StreamCodec.of(
+                VoxySyncStartPayload::encode, VoxySyncStartPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, VoxySyncStartPayload payload) {
+            buf.writeUtf(payload.syncId);
+            buf.writeUtf(payload.dimensionId);
+            buf.writeInt(payload.totalRegions);
+            buf.writeLong(payload.totalBytes);
+        }
+
+        public static VoxySyncStartPayload decode(RegistryFriendlyByteBuf buf) {
+            return new VoxySyncStartPayload(buf.readUtf(), buf.readUtf(), buf.readInt(), buf.readLong());
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record VoxyRegionPartPayload(String syncId, String dimensionId, int regionX, int regionZ,
+                                        int partIndex, int totalParts, long byteOffset, long totalBytes,
+                                        long timestampSeconds, byte[] data) implements CustomPacketPayload {
+        public static final Type<VoxyRegionPartPayload> TYPE = new Type<>(VOXY_REGION_PART_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, VoxyRegionPartPayload> STREAM_CODEC = StreamCodec.of(
+                VoxyRegionPartPayload::encode, VoxyRegionPartPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, VoxyRegionPartPayload payload) {
+            buf.writeUtf(payload.syncId);
+            buf.writeUtf(payload.dimensionId);
+            buf.writeInt(payload.regionX);
+            buf.writeInt(payload.regionZ);
+            buf.writeInt(payload.partIndex);
+            buf.writeInt(payload.totalParts);
+            buf.writeLong(payload.byteOffset);
+            buf.writeLong(payload.totalBytes);
+            buf.writeLong(payload.timestampSeconds);
+            buf.writeByteArray(payload.data);
+        }
+
+        public static VoxyRegionPartPayload decode(RegistryFriendlyByteBuf buf) {
+            return new VoxyRegionPartPayload(
+                    buf.readUtf(),
+                    buf.readUtf(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readLong(),
+                    buf.readLong(),
+                    buf.readLong(),
+                    buf.readByteArray()
+            );
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record VoxySyncProgressPayload(String syncId, int processedRegions, int totalRegions,
+                                          long processedBytes, long totalBytes, String status) implements CustomPacketPayload {
+        public static final Type<VoxySyncProgressPayload> TYPE = new Type<>(VOXY_SYNC_PROGRESS_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, VoxySyncProgressPayload> STREAM_CODEC = StreamCodec.of(
+                VoxySyncProgressPayload::encode, VoxySyncProgressPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, VoxySyncProgressPayload payload) {
+            buf.writeUtf(payload.syncId);
+            buf.writeInt(payload.processedRegions);
+            buf.writeInt(payload.totalRegions);
+            buf.writeLong(payload.processedBytes);
+            buf.writeLong(payload.totalBytes);
+            buf.writeUtf(payload.status);
+        }
+
+        public static VoxySyncProgressPayload decode(RegistryFriendlyByteBuf buf) {
+            return new VoxySyncProgressPayload(buf.readUtf(), buf.readInt(), buf.readInt(),
+                    buf.readLong(), buf.readLong(), buf.readUtf());
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record VoxySyncCompletePayload(String syncId, boolean success, String message,
+                                          int transferredRegions, long transferredBytes) implements CustomPacketPayload {
+        public static final Type<VoxySyncCompletePayload> TYPE = new Type<>(VOXY_SYNC_COMPLETE_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, VoxySyncCompletePayload> STREAM_CODEC = StreamCodec.of(
+                VoxySyncCompletePayload::encode, VoxySyncCompletePayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, VoxySyncCompletePayload payload) {
+            buf.writeUtf(payload.syncId);
+            buf.writeBoolean(payload.success);
+            buf.writeUtf(payload.message);
+            buf.writeInt(payload.transferredRegions);
+            buf.writeLong(payload.transferredBytes);
+        }
+
+        public static VoxySyncCompletePayload decode(RegistryFriendlyByteBuf buf) {
+            return new VoxySyncCompletePayload(buf.readUtf(), buf.readBoolean(), buf.readUtf(),
+                    buf.readInt(), buf.readLong());
         }
 
         @Override
