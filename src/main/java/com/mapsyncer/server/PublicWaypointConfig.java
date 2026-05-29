@@ -20,6 +20,8 @@ public final class PublicWaypointConfig {
             .resolve("mapsyncer-public-waypoints.json");
 
     private static volatile Config config = defaultConfig();
+    private static volatile PacketHandler.PublicWaypointsPayload cachedPayload;
+    private static volatile Summary cachedSummary = new Summary(false, "ServerPublic", 0, "");
 
     private PublicWaypointConfig() {
     }
@@ -27,6 +29,7 @@ public final class PublicWaypointConfig {
     public static void load() {
         if (!Files.exists(CONFIG_PATH)) {
             config = defaultConfig();
+            rebuildCache();
             save();
             return;
         }
@@ -34,9 +37,11 @@ public final class PublicWaypointConfig {
         try {
             Config loaded = GSON.fromJson(Files.readString(CONFIG_PATH), Config.class);
             config = sanitize(loaded);
+            rebuildCache();
             MapSyncer.LOGGER.info("Loaded public waypoints from {}", CONFIG_PATH);
         } catch (Exception e) {
             config = defaultConfig();
+            rebuildCache();
             MapSyncer.LOGGER.error("Failed to load public waypoints, using defaults", e);
         }
     }
@@ -51,9 +56,20 @@ public final class PublicWaypointConfig {
     }
 
     public static PacketHandler.PublicWaypointsPayload createPayload() {
+        return cachedPayload;
+    }
+
+    public static Summary summary() {
+        return cachedSummary;
+    }
+
+    private static void rebuildCache() {
         Config current = config;
         if (current == null || !current.enabled || current.waypoints == null || current.waypoints.isEmpty()) {
-            return null;
+            String groupName = current == null ? "ServerPublic" : cleanField(current.groupName, "ServerPublic");
+            cachedPayload = null;
+            cachedSummary = new Summary(current != null && current.enabled, groupName, 0, "");
+            return;
         }
 
         List<PacketHandler.PublicWaypoint> waypoints = new ArrayList<>();
@@ -81,10 +97,13 @@ public final class PublicWaypointConfig {
         }
 
         if (waypoints.isEmpty()) {
-            return null;
+            cachedPayload = null;
+            cachedSummary = new Summary(current.enabled, groupName, 0, "");
+            return;
         }
         String hash = HashUtils.computeHash(GSON.toJson(waypoints).getBytes(StandardCharsets.UTF_8));
-        return new PacketHandler.PublicWaypointsPayload(groupName, current.replaceGroup, hash, waypoints);
+        cachedPayload = new PacketHandler.PublicWaypointsPayload(groupName, current.replaceGroup, hash, waypoints);
+        cachedSummary = new Summary(current.enabled, groupName, waypoints.size(), hash);
     }
 
     private static Config sanitize(Config loaded) {
@@ -140,5 +159,8 @@ public final class PublicWaypointConfig {
         public int color = 0;
         public boolean disabled;
         public String type = "0";
+    }
+
+    public record Summary(boolean enabled, String groupName, int count, String hash) {
     }
 }

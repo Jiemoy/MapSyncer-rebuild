@@ -138,12 +138,14 @@ server_map_cache/
 config/mapsyncer-public-waypoints.json
 ```
 
-默认会生成示例配置但不启用。启用后，服务端会在玩家进服或开始地图同步时下发公共路标。客户端会尝试写入 Xaero 的 `waypoints.txt` 文本文件，写入格式为：
+默认会生成示例配置但不启用。启用后，服务端会在玩家进服或开始地图同步时下发公共路标，也可以在 GUI 的“同步”页手动同步。客户端会尝试写入 Xaero 的 `waypoints.txt` 文本文件，写入格式为：
 
 ```text
 waypoint:name:initial:x:y:z:color:disabled:type:set:dimension
 ```
 
 MapSyncer 只管理配置中的公共组（默认 `ServerPublic`）：写入前会读取现有 `waypoints.txt`，删除该组旧行，再追加服务端下发的新行。玩家私人路标和其他组不会被修改。
+
+公共路标同步会在客户端后台执行，并使用 hash 缓存跳过重复写入。合并 `waypoints.txt` 时采用逐行流式读写到临时文件，再原子替换，避免大文件一次性读入内存。如果 Xaero 正在写入路标导致文件被占用，MapSyncer 会放弃本次覆盖并在 GUI 中显示“文件被占用”，玩家稍后可手动重试。
 
 公共路标依赖客户端存在可识别的 Xaero 路标目录，推荐同时安装/启用 Xaero Minimap 或 Xaero Waypoints。若客户端没有对应路标目录，MapSyncer 会跳过公共路标同步，普通地图同步不受影响。

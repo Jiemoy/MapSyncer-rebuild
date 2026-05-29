@@ -22,6 +22,7 @@ public class MapSyncerScreen extends Screen {
     private Button syncAllButton;
     private Button radiusSyncButton;
     private Button radiusValueButton;
+    private Button publicWaypointsButton;
     private Button voxyButton;
     private Button autoSyncButton;
     private Button hudButton;
@@ -160,10 +161,14 @@ public class MapSyncerScreen extends Screen {
                 b -> MapSyncerCommand.sendRadiusSyncRequest(Minecraft.getInstance(), radiusSyncBlocks)
         ).bounds(x + stepWidth * 2 + valueWidth + gap * 3, radiusY,
                 Math.max(96, radiusButtonWidth), 22).build());
+        publicWaypointsButton = addRenderableWidget(Button.builder(
+                Component.translatable("mapsyncer.gui.waypoints.sync"),
+                b -> PublicWaypointReceiver.requestManualSync()
+        ).bounds(x, y + 56, contentWidth(), 22).build());
         voxyButton = addRenderableWidget(Button.builder(
                 Component.translatable("mapsyncer.gui.voxy.sync_current"),
                 b -> VoxySyncClient.startCurrentDimensionSync(Minecraft.getInstance())
-        ).bounds(x, y + 56, contentWidth(), 22).build());
+        ).bounds(x, y + 84, contentWidth(), 22).build());
     }
 
     private void buildAdminWidgets(int panelLeft, int panelTop) {
@@ -360,6 +365,12 @@ public class MapSyncerScreen extends Screen {
         }
 
         int voxyY = syncVoxyY();
+        PublicWaypointClientState.Status waypointStatus = PublicWaypointClientState.getStatus();
+        Component waypointText = Component.translatable("mapsyncer.gui.waypoints.status",
+                Component.translatable("mapsyncer.gui.waypoints.status." + waypointStatus.name().toLowerCase()).getString(),
+                PublicWaypointClientState.getCount());
+        drawSingleLine(graphics, waypointText, x, voxyY - 18, contentWidth(), 0xFFB9C3CC);
+
         String voxyReason = VoxySyncClient.getUnavailableReason(minecraft);
         Component voxyReasonText = switch (voxyReason) {
             case "" -> Component.translatable("mapsyncer.gui.voxy.reason.enabled");
@@ -430,6 +441,14 @@ public class MapSyncerScreen extends Screen {
                 status.radiusSyncEnabled() ? Component.translatable("mapsyncer.gui.settings.on").getString()
                         : Component.translatable("mapsyncer.gui.settings.off").getString(),
                 status.maxRadiusSyncBlocks(), status.radiusSyncCenterMode()), x, statusY + 80, 0xFFB9C3CC, false);
+        String waypointHash = status.publicWaypointsHash().isBlank()
+                ? "-"
+                : status.publicWaypointsHash().substring(0, Math.min(8, status.publicWaypointsHash().length()));
+        graphics.text(font, Component.translatable("mapsyncer.gui.admin.waypoints",
+                status.publicWaypointsEnabled() ? Component.translatable("mapsyncer.gui.settings.on").getString()
+                        : Component.translatable("mapsyncer.gui.settings.off").getString(),
+                status.publicWaypointsGroup(), status.publicWaypointsCount(), waypointHash),
+                x, statusY + 96, 0xFFB9C3CC, false);
     }
 
     private void drawSettingsTab(GuiGraphicsExtractor graphics) {
@@ -476,6 +495,10 @@ public class MapSyncerScreen extends Screen {
         }
         if (radiusSyncButton != null) {
             radiusSyncButton.active = canSync && ClientPlayNetworking.canSend(PacketHandler.RadiusSyncRequestPayload.TYPE);
+        }
+        if (publicWaypointsButton != null) {
+            publicWaypointsButton.active = minecraft != null && minecraft.player != null
+                    && ClientPlayNetworking.canSend(PacketHandler.PublicWaypointsRequestPayload.TYPE);
         }
         if (voxyButton != null) {
             if (MapPacketReceiver.isServerInstalled()) {
@@ -633,7 +656,7 @@ public class MapSyncerScreen extends Screen {
     }
 
     private int syncBarY() {
-        return syncButtonY() + (panelHeight() < 270 ? 82 : 88);
+        return syncButtonY() + (panelHeight() < 270 ? 110 : 116);
     }
 
     private int syncVoxyY() {

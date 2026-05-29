@@ -51,6 +51,8 @@ public class PacketHandler {
             MapSyncer.MOD_ID, "radius_sync_request");
     public static final Identifier PUBLIC_WAYPOINTS_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "public_waypoints");
+    public static final Identifier PUBLIC_WAYPOINTS_REQUEST_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "public_waypoints_request");
 
     /** 服务端已安装通知包的资源定位符 */
     public static final Identifier SERVER_INSTALLED_ID = Identifier.fromNamespaceAndPath(
@@ -500,6 +502,10 @@ public class PacketHandler {
             int radiusSyncFixedX,
             int radiusSyncFixedY,
             int radiusSyncFixedZ,
+            boolean publicWaypointsEnabled,
+            String publicWaypointsGroup,
+            int publicWaypointsCount,
+            String publicWaypointsHash,
             String status,
             String currentDimension,
             String incrementalStatus
@@ -528,6 +534,10 @@ public class PacketHandler {
             buf.writeInt(payload.radiusSyncFixedX);
             buf.writeInt(payload.radiusSyncFixedY);
             buf.writeInt(payload.radiusSyncFixedZ);
+            buf.writeBoolean(payload.publicWaypointsEnabled);
+            buf.writeUtf(payload.publicWaypointsGroup);
+            buf.writeInt(payload.publicWaypointsCount);
+            buf.writeUtf(payload.publicWaypointsHash);
             buf.writeUtf(payload.status);
             buf.writeUtf(payload.currentDimension);
             buf.writeUtf(payload.incrementalStatus);
@@ -553,6 +563,10 @@ public class PacketHandler {
                     buf.readInt(),
                     buf.readInt(),
                     buf.readInt(),
+                    buf.readBoolean(),
+                    buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH),
+                    buf.readInt(),
+                    buf.readUtf(MAX_HASH_LENGTH),
                     buf.readUtf(),
                     buf.readUtf(),
                     buf.readUtf()
@@ -701,6 +715,25 @@ public class PacketHandler {
                 waypoints.add(PublicWaypoint.decode(buf));
             }
             return new PublicWaypointsPayload(groupName, replaceGroup, hash, waypoints);
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record PublicWaypointsRequestPayload() implements CustomPacketPayload {
+        public static final Type<PublicWaypointsRequestPayload> TYPE = new Type<>(PUBLIC_WAYPOINTS_REQUEST_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, PublicWaypointsRequestPayload> STREAM_CODEC = StreamCodec.of(
+                PublicWaypointsRequestPayload::encode, PublicWaypointsRequestPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, PublicWaypointsRequestPayload payload) {
+        }
+
+        public static PublicWaypointsRequestPayload decode(RegistryFriendlyByteBuf buf) {
+            return new PublicWaypointsRequestPayload();
         }
 
         @Override

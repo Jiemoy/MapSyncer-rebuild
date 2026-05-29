@@ -73,6 +73,7 @@ public class MapSyncerClient implements ClientModInitializer {
 
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             AdminStatusClientState.reset();
+            PublicWaypointClientState.reset();
             VoxySyncClient.reset();
             ClientJoinHandler.onClientDisconnect(client);
         });

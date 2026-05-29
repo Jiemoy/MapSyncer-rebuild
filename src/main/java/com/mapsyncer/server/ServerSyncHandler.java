@@ -340,6 +340,9 @@ public class ServerSyncHandler {
         PayloadTypeRegistry.clientboundPlay().register(
                 PacketHandler.PublicWaypointsPayload.TYPE,
                 PacketHandler.PublicWaypointsPayload.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(
+                PacketHandler.PublicWaypointsRequestPayload.TYPE,
+                PacketHandler.PublicWaypointsRequestPayload.STREAM_CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(PacketHandler.SyncRequestPayload.TYPE,
                 (payload, context) -> handleSyncRequest(payload, context));
@@ -349,6 +352,8 @@ public class ServerSyncHandler {
                 (payload, context) -> handleAdminStatusRequest(context));
         ServerPlayNetworking.registerGlobalReceiver(PacketHandler.AdminSettingsUpdatePayload.TYPE,
                 (payload, context) -> handleAdminSettingsUpdate(payload, context));
+        ServerPlayNetworking.registerGlobalReceiver(PacketHandler.PublicWaypointsRequestPayload.TYPE,
+                (payload, context) -> sendPublicWaypoints(context.player()));
     }
 
     private static void handleAdminStatusRequest(ServerPlayNetworking.Context context) {
@@ -388,6 +393,7 @@ public class ServerSyncHandler {
             ServerPlayNetworking.send(player, new PacketHandler.AdminStatusPayload(
                     false, false, 0, 0, 0, 0, 0, 0, 0, 0L, 0,
                     false, 0, RadiusSyncCenterMode.PLAYER_POSITION.name(), "minecraft:overworld", 0, 64, 0,
+                    false, "", 0, "",
                     "permission_denied", "", ""));
             return;
         }
@@ -398,6 +404,7 @@ public class ServerSyncHandler {
         long cacheSizeBytes = cacheStats.stream().mapToLong(ConversionOrchestrator.DimensionCacheStats::sizeBytes).sum();
         ResourceKey<Level> currentDimension = ConversionOrchestrator.getCurrentDimension();
         String currentDimensionId = currentDimension == null ? "" : currentDimension.identifier().toString();
+        PublicWaypointConfig.Summary waypointSummary = PublicWaypointConfig.summary();
 
         ServerPlayNetworking.send(player, new PacketHandler.AdminStatusPayload(
                 true,
@@ -418,6 +425,10 @@ public class ServerSyncHandler {
                 ModConfig.SERVER.radiusSyncFixedX,
                 ModConfig.SERVER.radiusSyncFixedY,
                 ModConfig.SERVER.radiusSyncFixedZ,
+                waypointSummary.enabled(),
+                waypointSummary.groupName(),
+                waypointSummary.count(),
+                waypointSummary.hash(),
                 ConversionOrchestrator.getStatus(),
                 currentDimensionId,
                 IncrementalUpdateHandler.getInstance().getStatusInfo()
