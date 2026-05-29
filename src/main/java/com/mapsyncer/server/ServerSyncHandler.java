@@ -83,8 +83,8 @@ public class ServerSyncHandler {
      *
      * @return 批次累积阈值（字节）
      */
-    private static int getBatchThreshold() {
-        int limitKBps = ModConfig.SERVER.syncSpeedLimitKBps;
+    private static int getBatchThreshold(ServerPlayer player, UUID playerId) {
+        int limitKBps = getEffectiveLimitKBps(player, playerId);
         if (limitKBps <= 0) {
             // 无限速：使用最大包大小
             return getMaxPacketSize();
@@ -105,7 +105,7 @@ public class ServerSyncHandler {
         // 实际限速 = 整包数 × 包大小
         int actualThreshold = packetsPerSecond * maxPacketSize;
 
-        LOGGER.debug("Speed limit adjusted: {} KB/s → {} packets/s × {} KB = {} KB/s",
+        LOGGER.debug("Speed limit adjusted: {} KB/s -> {} packets/s x {} KB = {} KB/s",
                 limitKBps, packetsPerSecond, maxPacketSize / 1024, actualThreshold / 1024);
 
         return actualThreshold;
@@ -239,8 +239,23 @@ public class ServerSyncHandler {
     /** 限速统计：周期开始时间 */
     private static final Map<UUID, Long> speedLimitCycleStart = new ConcurrentHashMap<>();
 
+    /** 每玩家自适应限速状态 */
+    private static final Map<UUID, AdaptiveThrottleState> adaptiveThrottleStates = new ConcurrentHashMap<>();
+
     /** 限速周期最大时长（1秒），防止周期过长导致累计量过大 */
     private static final long MAX_SPEED_LIMIT_CYCLE_MS = 1000;
+
+    private static final class AdaptiveThrottleState {
+        int currentLimitKBps;
+        int lastPingMs;
+        int stableRecoverSamples;
+        long lastAdjustMillis;
+        boolean congested;
+
+        AdaptiveThrottleState(int initialLimitKBps) {
+            this.currentLimitKBps = initialLimitKBps;
+        }
+    }
 
     /**
      * 轻量级的 region 同步信息。
@@ -523,7 +538,7 @@ public class ServerSyncHandler {
      * @return true 表示速度限制完成，false 表示玩家已掉线应中断同步
      */
     private static boolean applySpeedLimit(int bytesSent, ServerPlayer player, UUID playerId) {
-        int limitKBps = ModConfig.SERVER.syncSpeedLimitKBps;
+        int limitKBps = getEffectiveLimitKBps(player, playerId);
         if (limitKBps <= 0) return true; // No limit
 
         // 获取或初始化限速周期状态
@@ -605,6 +620,80 @@ public class ServerSyncHandler {
         return true;
     }
 
+    private static int getEffectiveLimitKBps(ServerPlayer player, UUID playerId) {
+        if (!ModConfig.SERVER.enableAdaptiveSyncThrottle) {
+            return ModConfig.SERVER.syncSpeedLimitKBps;
+        }
+
+        int ceiling = getAdaptiveCeilingKBps();
+        if (ceiling <= 0) {
+            return 0;
+        }
+
+        AdaptiveThrottleState state = adaptiveThrottleStates.computeIfAbsent(playerId,
+                id -> new AdaptiveThrottleState(ceiling));
+        if (state.currentLimitKBps <= 0) {
+            state.currentLimitKBps = ceiling;
+        } else if (state.currentLimitKBps > ceiling) {
+            state.currentLimitKBps = ceiling;
+        }
+
+        int pingMs = player.connection == null ? 0 : player.connection.latency();
+        state.lastPingMs = pingMs;
+
+        long now = System.currentTimeMillis();
+        long cooldownMs = Math.max(1L, ModConfig.SERVER.adaptiveThrottleAdjustCooldownMs);
+        boolean cooldownReady = now - state.lastAdjustMillis >= cooldownMs;
+        int oldLimit = state.currentLimitKBps;
+        int minLimit = Math.min(ceiling, Math.max(1, ModConfig.SERVER.adaptiveMinSyncSpeedKBps));
+
+        if (pingMs >= ModConfig.SERVER.adaptivePingThresholdMs) {
+            state.stableRecoverSamples = 0;
+            if (cooldownReady) {
+                double factor = ModConfig.SERVER.adaptiveDecreaseFactor;
+                int nextLimit = Math.max(minLimit, (int) Math.floor(state.currentLimitKBps * factor));
+                state.currentLimitKBps = Math.min(ceiling, nextLimit);
+                state.lastAdjustMillis = now;
+                state.congested = true;
+                logAdaptiveAdjustment(player, pingMs, oldLimit, state.currentLimitKBps, "congestion");
+            } else {
+                LOGGER.debug("Adaptive throttle cooldown: player={}, ping={}ms, limit={} KB/s",
+                        player.getName().getString(), pingMs, state.currentLimitKBps);
+            }
+            return state.currentLimitKBps;
+        }
+
+        if (pingMs <= ModConfig.SERVER.adaptivePingRecoverMs) {
+            state.stableRecoverSamples++;
+            if (state.stableRecoverSamples >= ModConfig.SERVER.adaptiveStableRecoverSamples
+                    && cooldownReady && state.currentLimitKBps < ceiling) {
+                state.currentLimitKBps = Math.min(ceiling,
+                        state.currentLimitKBps + Math.max(1, ModConfig.SERVER.adaptiveIncreaseStepKBps));
+                state.lastAdjustMillis = now;
+                state.stableRecoverSamples = 0;
+                state.congested = state.currentLimitKBps < ceiling;
+                logAdaptiveAdjustment(player, pingMs, oldLimit, state.currentLimitKBps, "recovery");
+            }
+            return state.currentLimitKBps;
+        }
+
+        state.stableRecoverSamples = 0;
+        return state.currentLimitKBps;
+    }
+
+    private static int getAdaptiveCeilingKBps() {
+        int fixedLimit = ModConfig.SERVER.syncSpeedLimitKBps;
+        if (fixedLimit > 0) {
+            return fixedLimit;
+        }
+        return Math.max(0, ModConfig.SERVER.adaptiveUnlimitedCeilingKBps);
+    }
+
+    private static void logAdaptiveAdjustment(ServerPlayer player, int pingMs, int oldLimit, int newLimit, String reason) {
+        LOGGER.debug("Adaptive sync throttle {}: player={}, ping={}ms, {} -> {} KB/s",
+                reason, player.getName().getString(), pingMs, oldLimit, newLimit);
+    }
+
     /**
      * 清除玩家的限速状态。
      *
@@ -613,6 +702,7 @@ public class ServerSyncHandler {
     private static void clearSpeedLimitState(UUID playerId) {
         speedLimitBytesSent.remove(playerId);
         speedLimitCycleStart.remove(playerId);
+        adaptiveThrottleStates.remove(playerId);
     }
 
     /**
@@ -965,7 +1055,7 @@ public class ServerSyncHandler {
         List<ChunkMapData> batch = new ArrayList<>();
         int batchBytes = 0;
         int processed = 0;
-        int batchThreshold = getBatchThreshold(); // 批次累积阈值（目标每秒发送量）
+        int batchThreshold = getBatchThreshold(serverPlayer, playerId); // 批次累积阈值（目标每秒发送量）
 
         for (RegionSyncInfo info : regionsToSync) {
             if (!isPlayerStillValid(serverPlayer)) {
@@ -992,6 +1082,7 @@ public class ServerSyncHandler {
                     processed += batch.size();
                     batch.clear();
                     batchBytes = 0;
+                    batchThreshold = getBatchThreshold(serverPlayer, playerId);
                 }
 
                 if (!sendRegionParts(syncId, info, chunk, serverPlayer, worldId, playerId)) {
@@ -1021,6 +1112,7 @@ public class ServerSyncHandler {
 
                 batch.clear();
                 batchBytes = 0;
+                batchThreshold = getBatchThreshold(serverPlayer, playerId);
             }
 
             batch.add(chunk);
@@ -1123,6 +1215,7 @@ public class ServerSyncHandler {
         syncTasks.clear();
         speedLimitBytesSent.clear();
         speedLimitCycleStart.clear();
+        adaptiveThrottleStates.clear();
         LOGGER.info("ServerSyncHandler tracking data cleared");
     }
 

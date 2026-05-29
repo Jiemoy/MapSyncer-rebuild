@@ -108,7 +108,10 @@ config/mapsyncer-client.json
 
 - `enableVoxySync`：是否允许 Voxy MCA 同步，默认 `false`
 - `maxSyncPacketSize`：同步分包大小
-- `syncSpeedLimitKBps`：同步限速；客户端同步时卡顿可优先降低这个值
+- `syncSpeedLimitKBps`：每个玩家同步的固定最高速率；`0` 表示不设固定上限
+- `enableAdaptiveSyncThrottle`：是否根据玩家 Ping 自动调节同步速率，默认 `true`
+- `adaptivePingThresholdMs` / `adaptivePingRecoverMs`：触发降速和恢复的 Ping 阈值，默认 `200ms` / `150ms`
+- `adaptiveThrottleAdjustCooldownMs`：自适应调速冷却时间，默认 `2000ms`
 - `enableDirtyRegionTracking`：是否启用 DirtyRegion 精准增量，默认 `true`
 - `enableRadiusSync`：是否允许半径同步，默认 `true`
 - `maxRadiusSyncBlocks`：玩家可请求的最大半径，默认 `3000`
@@ -117,7 +120,8 @@ config/mapsyncer-client.json
 
 同步性能：
 
-- 服务端按 `maxSyncPacketSize` 分包，并按 `syncSpeedLimitKBps` 限速发送；玩家同步时卡顿，优先降低 `syncSpeedLimitKBps`
+- 服务端按 `maxSyncPacketSize` 分包，并按每玩家有效速率发送；固定上限来自 `syncSpeedLimitKBps`
+- 自适应限速开启时，服务端会读取原版 KeepAlive 统计的玩家 Ping。Ping 超过阈值会降速，恢复稳定后再慢慢上调；同一玩家每次调速至少间隔 `adaptiveThrottleAdjustCooldownMs`，避免一次高 Ping 周期内连续降到最低
 - 客户端会在后台写入地图文件、计算哈希和保存同步缓存；当前视距内的 Xaero 地图刷新会按 tick 节流，避免一次性刷新大量 region
 
 服务端缓存目录：

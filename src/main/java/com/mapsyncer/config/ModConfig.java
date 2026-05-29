@@ -75,6 +75,22 @@ public class ModConfig {
                         SERVER.radiusSyncCenterMode = RadiusSyncCenterMode.PLAYER_POSITION;
                         needsSave = true;
                     }
+                    if (!root.has("enableAdaptiveSyncThrottle")) {
+                        SERVER.enableAdaptiveSyncThrottle = true;
+                        needsSave = true;
+                    }
+                    if (!root.has("adaptivePingThresholdMs")) {
+                        SERVER.adaptivePingThresholdMs = 200;
+                        needsSave = true;
+                    }
+                    if (!root.has("adaptivePingRecoverMs")) {
+                        SERVER.adaptivePingRecoverMs = 150;
+                        needsSave = true;
+                    }
+                    if (!root.has("adaptiveThrottleAdjustCooldownMs")) {
+                        SERVER.adaptiveThrottleAdjustCooldownMs = 2000;
+                        needsSave = true;
+                    }
                 }
                 if (needsSave) {
                     save();
@@ -172,6 +188,15 @@ public class ModConfig {
         public int maxConcurrentRegions = 4;
         public int maxSyncPacketSize = 262144; // 256KB
         public int syncSpeedLimitKBps = 1024; // 1MB/s
+        public boolean enableAdaptiveSyncThrottle = true;
+        public int adaptivePingThresholdMs = 200;
+        public int adaptivePingRecoverMs = 150;
+        public int adaptiveThrottleAdjustCooldownMs = 2000;
+        public int adaptiveMinSyncSpeedKBps = 128;
+        public int adaptiveIncreaseStepKBps = 64;
+        public double adaptiveDecreaseFactor = 0.5;
+        public int adaptiveStableRecoverSamples = 3;
+        public int adaptiveUnlimitedCeilingKBps = 4096;
         // Sends raw MCA files to clients when enabled. Keep disabled unless players are trusted.
         public boolean enableVoxySync = false;
 
@@ -212,6 +237,19 @@ public class ModConfig {
             this.maxConcurrentRegions = other.maxConcurrentRegions;
             this.maxSyncPacketSize = other.maxSyncPacketSize;
             this.syncSpeedLimitKBps = other.syncSpeedLimitKBps;
+            this.enableAdaptiveSyncThrottle = other.enableAdaptiveSyncThrottle;
+            this.adaptivePingThresholdMs = other.adaptivePingThresholdMs > 0 ? other.adaptivePingThresholdMs : 200;
+            this.adaptivePingRecoverMs = other.adaptivePingRecoverMs > 0 ? other.adaptivePingRecoverMs : 150;
+            this.adaptiveThrottleAdjustCooldownMs = other.adaptiveThrottleAdjustCooldownMs > 0
+                    ? other.adaptiveThrottleAdjustCooldownMs : 2000;
+            this.adaptiveMinSyncSpeedKBps = other.adaptiveMinSyncSpeedKBps > 0 ? other.adaptiveMinSyncSpeedKBps : 128;
+            this.adaptiveIncreaseStepKBps = other.adaptiveIncreaseStepKBps > 0 ? other.adaptiveIncreaseStepKBps : 64;
+            this.adaptiveDecreaseFactor = other.adaptiveDecreaseFactor > 0 && other.adaptiveDecreaseFactor < 1
+                    ? other.adaptiveDecreaseFactor : 0.5;
+            this.adaptiveStableRecoverSamples = other.adaptiveStableRecoverSamples > 0
+                    ? other.adaptiveStableRecoverSamples : 3;
+            this.adaptiveUnlimitedCeilingKBps = other.adaptiveUnlimitedCeilingKBps > 0
+                    ? other.adaptiveUnlimitedCeilingKBps : 4096;
             this.enableVoxySync = other.enableVoxySync;
             this.incrementalUpdateMode = other.incrementalUpdateMode != null
                     ? other.incrementalUpdateMode : UpdateMode.DISABLED;
