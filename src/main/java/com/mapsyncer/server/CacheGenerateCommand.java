@@ -12,6 +12,7 @@ import com.mapsyncer.server.ConversionOrchestrator.DimensionCacheStats;
 import com.mapsyncer.server.ConversionOrchestrator.SingleRegionResult;
 import com.mapsyncer.util.ChatUtils;
 import com.mapsyncer.util.DimensionPathMapping;
+import com.mapsyncer.util.MapSyncerExecutors;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.arguments.DimensionArgument;
 import net.minecraft.resources.ResourceKey;
@@ -116,16 +117,15 @@ public class CacheGenerateCommand {
         MinecraftServer server = ctx.getSource().getServer();
         ctx.getSource().sendSuccess(() -> ChatUtils.message("mapsyncer.generate.start_full"), false);
 
-        Thread worker = new Thread(() -> {
+        MapSyncerExecutors.submitConversion(() -> {
             ConversionOrchestrator.generateAll(server);
             String dimList = String.join(", ", ConversionOrchestrator.getCompletedDimensions());
-            ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.generate.full_complete",
-                    ConversionOrchestrator.getProcessedCount(),
-                    ConversionOrchestrator.getTotalCount(),
-                    ConversionOrchestrator.getCompletedDimensions().size(),
-                    dimList), false);
-        }, "xaero-map-generator");
-        worker.start();
+            server.execute(() -> ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.generate.full_complete",
+                            ConversionOrchestrator.getProcessedCount(),
+                            ConversionOrchestrator.getTotalCount(),
+                            ConversionOrchestrator.getCompletedDimensions().size(),
+                            dimList), false));
+        });
 
         return Command.SINGLE_SUCCESS;
     }
@@ -145,14 +145,13 @@ public class CacheGenerateCommand {
         String friendlyName = DimensionPathMapping.getInstance().getFriendlyName(dimension);
         ctx.getSource().sendSuccess(() -> ChatUtils.message("mapsyncer.generate.start_dim", friendlyName), false);
 
-        Thread worker = new Thread(() -> {
+        MapSyncerExecutors.submitConversion(() -> {
             ConversionOrchestrator.generateDimension(server, dimensionId);
-            ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.generate.dim_complete",
-                    ConversionOrchestrator.getProcessedCount(),
-                    ConversionOrchestrator.getTotalCount(),
-                    ConversionOrchestrator.getUpdatedCount()), false);
-        }, "xaero-map-generator");
-        worker.start();
+            server.execute(() -> ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.generate.dim_complete",
+                            ConversionOrchestrator.getProcessedCount(),
+                            ConversionOrchestrator.getTotalCount(),
+                            ConversionOrchestrator.getUpdatedCount()), false));
+        });
 
         return Command.SINGLE_SUCCESS;
     }
@@ -174,14 +173,13 @@ public class CacheGenerateCommand {
         String friendlyName = DimensionPathMapping.getInstance().getFriendlyName(dimension);
         ctx.getSource().sendSuccess(() -> ChatUtils.message("mapsyncer.generate.start_force", friendlyName), false);
 
-        Thread worker = new Thread(() -> {
+        MapSyncerExecutors.submitConversion(() -> {
             ConversionOrchestrator.generateDimensionForce(server, dimensionId);
-            ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.generate.force_complete",
-                    ConversionOrchestrator.getProcessedCount(),
-                    ConversionOrchestrator.getTotalCount(),
-                    ConversionOrchestrator.getUpdatedCount()), false);
-        }, "xaero-map-generator");
-        worker.start();
+            server.execute(() -> ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.generate.force_complete",
+                            ConversionOrchestrator.getProcessedCount(),
+                            ConversionOrchestrator.getTotalCount(),
+                            ConversionOrchestrator.getUpdatedCount()), false));
+        });
 
         return Command.SINGLE_SUCCESS;
     }
@@ -209,15 +207,16 @@ public class CacheGenerateCommand {
         String friendlyName = DimensionPathMapping.getInstance().getFriendlyName(dimension);
         ctx.getSource().sendSuccess(() -> ChatUtils.message("mapsyncer.command.generating_region", x, z, friendlyName), false);
 
-        Thread worker = new Thread(() -> {
+        MapSyncerExecutors.submitConversion(() -> {
             SingleRegionResult result = ConversionOrchestrator.generateSingleRegion(server, dimension, x, z);
-            if (result == SingleRegionResult.SUCCESS) {
-                ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.command.region_converted"), false);
-            } else if (result == SingleRegionResult.CONVERSION_FAILED) {
-                ctx.getSource().sendFailure(ChatUtils.error("mapsyncer.command.region_conversion_failed", x, z));
-            }
-        }, "xaero-map-generator");
-        worker.start();
+            server.execute(() -> {
+                if (result == SingleRegionResult.SUCCESS) {
+                    ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.command.region_converted"), false);
+                } else if (result == SingleRegionResult.CONVERSION_FAILED) {
+                    ctx.getSource().sendFailure(ChatUtils.error("mapsyncer.command.region_conversion_failed", x, z));
+                }
+            });
+        });
 
         return Command.SINGLE_SUCCESS;
     }
@@ -291,11 +290,11 @@ public class CacheGenerateCommand {
         MinecraftServer server = ctx.getSource().getServer();
         ctx.getSource().sendSuccess(() -> ChatUtils.message("mapsyncer.command.incremental_run_start"), false);
 
-        Thread worker = new Thread(() -> {
+        MapSyncerExecutors.submitConversion(() -> {
             ConversionOrchestrator.performIncrementalScan(server);
-            ctx.getSource().sendSuccess(() -> ChatUtils.success("mapsyncer.command.incremental_run_complete"), false);
-        }, "xaero-map-incremental");
-        worker.start();
+            server.execute(() -> ctx.getSource().sendSuccess(() ->
+                    ChatUtils.success("mapsyncer.command.incremental_run_complete"), false));
+        });
 
         return Command.SINGLE_SUCCESS;
     }

@@ -376,7 +376,7 @@ public class RegionConverterStandalone {
                 int topY = -1;
                 int highestBlockY = -1;
                 String biomeName = null;
-                List<OverlayData> overlayList = new ArrayList<>();
+                List<OverlayData> overlayList = null;
                 byte surfaceLight = 0;
 
                 // 洞穴模式状态追踪（参考 Xaero WorldDataReader.java:346-351, 571-596）
@@ -467,7 +467,7 @@ public class RegionConverterStandalone {
                                 // 含水方块添加同层水 overlay（使用水的 lightBlock）
                                 int opacity = BlockPropertyResolver.getLightBlock("minecraft:water");
                                 byte overlayLight = ChunkSectionParser.getBlockLight(section, lx, ly, lz);
-                                addOverlay(overlayList, "minecraft:water", worldY, opacity, overlayLight);
+                                overlayList = addOverlay(overlayList, "minecraft:water", worldY, opacity, overlayLight);
                                 if (highestBlockY < 0) highestBlockY = worldY;
 
                                 surfaceLight = overlayLight;
@@ -481,7 +481,7 @@ public class RegionConverterStandalone {
                                 // 使用 lightBlock 作为 opacity（Xaero 方式）
                                 int opacity = BlockPropertyResolver.getLightBlock(singleState.name());
                                 byte overlayLight = ChunkSectionParser.getBlockLight(section, lx, ly, lz);
-                                addOverlay(overlayList, singleState.name(), worldY, opacity, overlayLight);
+                                overlayList = addOverlay(overlayList, singleState.name(), worldY, opacity, overlayLight);
                                 if (highestBlockY < 0) highestBlockY = worldY;
                                 continue;  // 继续向下找表面
                             }
@@ -548,7 +548,7 @@ public class RegionConverterStandalone {
                             // 含水方块添加同层水 overlay（使用水的 lightBlock）
                             int opacity = BlockPropertyResolver.getLightBlock("minecraft:water");
                             byte overlayLight = ChunkSectionParser.getBlockLight(section, lx, ly, lz);
-                            addOverlay(overlayList, "minecraft:water", worldY, opacity, overlayLight);
+                            overlayList = addOverlay(overlayList, "minecraft:water", worldY, opacity, overlayLight);
                             if (highestBlockY < 0) highestBlockY = worldY;
 
                             surfaceLight = overlayLight;
@@ -561,7 +561,7 @@ public class RegionConverterStandalone {
                         if (BlockPropertyResolver.isTranslucentFluid(state.name())) {
                             int opacity = BlockPropertyResolver.getLightBlock(state.name());
                             byte overlayLight = ChunkSectionParser.getBlockLight(section, lx, ly, lz);
-                            addOverlay(overlayList, state.name(), worldY, opacity, overlayLight);
+                            overlayList = addOverlay(overlayList, state.name(), worldY, opacity, overlayLight);
                             if (highestBlockY < 0) highestBlockY = worldY;
                             continue;  // 继续向下扫描找表面
                         }
@@ -576,7 +576,7 @@ public class RegionConverterStandalone {
                         if (BlockPropertyResolver.isTransparent(state.name())) {
                             int opacity = BlockPropertyResolver.getLightBlock(state.name());
                             byte overlayLight = ChunkSectionParser.getBlockLight(section, lx, ly, lz);
-                            addOverlay(overlayList, state.name(), worldY, opacity, overlayLight);
+                            overlayList = addOverlay(overlayList, state.name(), worldY, opacity, overlayLight);
                             if (highestBlockY < 0) highestBlockY = worldY;
                             continue;
                         }
@@ -603,7 +603,7 @@ public class RegionConverterStandalone {
                 }
 
                 // 记录像素数据
-                if (topState != null || !overlayList.isEmpty()) {
+                if (topState != null || (overlayList != null && !overlayList.isEmpty())) {
                     data.hasData[relX][relZ] = true;
                     data.blockNames[relX][relZ] = topState != null ? topState.name() : "minecraft:air";
                     int topBlockYValue = (highestBlockY >= 0) ? highestBlockY : topY;
@@ -611,7 +611,7 @@ public class RegionConverterStandalone {
                     // 参考 Xaero: biomeName 为 null 时使用 THE_VOID（虚空区域的深紫色）
                     data.biomeNames[relX][relZ] = biomeName != null ? biomeName : DEFAULT_BIOME;
                     data.lightMap[relX][relZ] = surfaceLight;
-                    if (!overlayList.isEmpty()) {
+                    if (overlayList != null && !overlayList.isEmpty()) {
                         data.overlays.put(relX * REGION_SIZE_BLOCKS + relZ, overlayList);
                     }
                 }
@@ -649,7 +649,7 @@ public class RegionConverterStandalone {
         byte skyLight = ChunkSectionParser.getSkyLight(section, lx, ly, lz);
 
         // 检查是否有流体 overlay（水/熔岩）
-        boolean hasFluidOverlay = overlayList.stream()
+        boolean hasFluidOverlay = overlayList != null && overlayList.stream()
             .anyMatch(o -> BlockPropertyResolver.isWater(o.blockName));
 
         // 检查是否有天空访问（位置高于高度图）
@@ -917,7 +917,10 @@ public class RegionConverterStandalone {
      * @param opacityToAdd 要添加的 opacity 值（lightBlock）
      * @param light 光照值
      */
-    private static void addOverlay(List<OverlayData> overlayList, String blockName, int y, int opacityToAdd, int light) {
+    private static List<OverlayData> addOverlay(List<OverlayData> overlayList, String blockName, int y, int opacityToAdd, int light) {
+        if (overlayList == null) {
+            overlayList = new ArrayList<>(2);
+        }
         // 限制单个添加值最大为 15
         if (opacityToAdd > 15) {
             opacityToAdd = 15;
@@ -944,6 +947,7 @@ public class RegionConverterStandalone {
             // 不同方块类型：创建新 overlay 层
             overlayList.add(new OverlayData(blockName, y, opacityToAdd, light));
         }
+        return overlayList;
     }
 
     /**

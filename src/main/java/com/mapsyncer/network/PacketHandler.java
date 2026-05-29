@@ -26,6 +26,12 @@ import java.util.Map;
  */
 public class PacketHandler {
 
+    private static final int MAX_CLIENT_META_ENTRIES = 200_000;
+    private static final int MAX_PATH_LENGTH = 512;
+    private static final int MAX_DIMENSION_LENGTH = 256;
+    private static final int MAX_HASH_LENGTH = 64;
+    private static final int MAX_PART_DATA_LENGTH = 1_000_000;
+
     /** 同步请求包的资源定位符 */
     public static final Identifier SYNC_REQUEST_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "sync_request");
@@ -35,6 +41,10 @@ public class PacketHandler {
     /** 同步进度包的资源定位符 */
     public static final Identifier SYNC_PROGRESS_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "sync_progress");
+    public static final Identifier SYNC_REGION_PART_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "sync_region_part");
+    public static final Identifier SYNC_REGION_COMPLETE_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "sync_region_complete");
 
     /** 服务端已安装通知包的资源定位符 */
     public static final Identifier SERVER_INSTALLED_ID = Identifier.fromNamespaceAndPath(
@@ -99,11 +109,14 @@ public class PacketHandler {
          */
         public static SyncRequestPayload decode(RegistryFriendlyByteBuf buf) {
             int size = buf.readInt();
+            if (size < 0 || size > MAX_CLIENT_META_ENTRIES) {
+                throw new IllegalArgumentException("Invalid sync metadata count: " + size);
+            }
             Map<String, ClientMeta> metaMap = new HashMap<>();
             for (int i = 0; i < size; i++) {
-                String path = buf.readUtf();
+                String path = buf.readUtf(MAX_PATH_LENGTH);
                 long timestampSeconds = buf.readLong();
-                String hash = buf.readUtf();
+                String hash = buf.readUtf(MAX_HASH_LENGTH);
                 metaMap.put(path, new ClientMeta(timestampSeconds, hash));
             }
             return new SyncRequestPayload(metaMap);
@@ -241,6 +254,123 @@ public class PacketHandler {
      *
      * @param version 服务端模组版本号
      */
+    public record SyncRegionPartPayload(
+            String syncId,
+            int worldId,
+            String regionKey,
+            String dimension,
+            int regionX,
+            int regionZ,
+            int caveLayer,
+            int partIndex,
+            int totalParts,
+            long byteOffset,
+            long totalBytes,
+            long timestampSeconds,
+            String hash,
+            byte[] data
+    ) implements CustomPacketPayload {
+        public static final Type<SyncRegionPartPayload> TYPE = new Type<>(SYNC_REGION_PART_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, SyncRegionPartPayload> STREAM_CODEC = StreamCodec.of(
+                SyncRegionPartPayload::encode, SyncRegionPartPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, SyncRegionPartPayload payload) {
+            buf.writeUtf(payload.syncId);
+            buf.writeInt(payload.worldId);
+            buf.writeUtf(payload.regionKey);
+            buf.writeUtf(payload.dimension);
+            buf.writeInt(payload.regionX);
+            buf.writeInt(payload.regionZ);
+            buf.writeInt(payload.caveLayer);
+            buf.writeInt(payload.partIndex);
+            buf.writeInt(payload.totalParts);
+            buf.writeLong(payload.byteOffset);
+            buf.writeLong(payload.totalBytes);
+            buf.writeLong(payload.timestampSeconds);
+            buf.writeUtf(payload.hash);
+            buf.writeByteArray(payload.data);
+        }
+
+        public static SyncRegionPartPayload decode(RegistryFriendlyByteBuf buf) {
+            return new SyncRegionPartPayload(
+                    buf.readUtf(MAX_PATH_LENGTH),
+                    buf.readInt(),
+                    buf.readUtf(MAX_PATH_LENGTH),
+                    buf.readUtf(MAX_DIMENSION_LENGTH),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readLong(),
+                    buf.readLong(),
+                    buf.readLong(),
+                    buf.readUtf(MAX_HASH_LENGTH),
+                    buf.readByteArray(MAX_PART_DATA_LENGTH)
+            );
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record SyncRegionCompletePayload(
+            String syncId,
+            int worldId,
+            String regionKey,
+            String dimension,
+            int regionX,
+            int regionZ,
+            int caveLayer,
+            int totalParts,
+            long totalBytes,
+            long timestampSeconds,
+            String hash
+    ) implements CustomPacketPayload {
+        public static final Type<SyncRegionCompletePayload> TYPE = new Type<>(SYNC_REGION_COMPLETE_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, SyncRegionCompletePayload> STREAM_CODEC = StreamCodec.of(
+                SyncRegionCompletePayload::encode, SyncRegionCompletePayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, SyncRegionCompletePayload payload) {
+            buf.writeUtf(payload.syncId);
+            buf.writeInt(payload.worldId);
+            buf.writeUtf(payload.regionKey);
+            buf.writeUtf(payload.dimension);
+            buf.writeInt(payload.regionX);
+            buf.writeInt(payload.regionZ);
+            buf.writeInt(payload.caveLayer);
+            buf.writeInt(payload.totalParts);
+            buf.writeLong(payload.totalBytes);
+            buf.writeLong(payload.timestampSeconds);
+            buf.writeUtf(payload.hash);
+        }
+
+        public static SyncRegionCompletePayload decode(RegistryFriendlyByteBuf buf) {
+            return new SyncRegionCompletePayload(
+                    buf.readUtf(MAX_PATH_LENGTH),
+                    buf.readInt(),
+                    buf.readUtf(MAX_PATH_LENGTH),
+                    buf.readUtf(MAX_DIMENSION_LENGTH),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readLong(),
+                    buf.readLong(),
+                    buf.readUtf(MAX_HASH_LENGTH)
+            );
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
     public record ServerInstalledPayload(String version) implements CustomPacketPayload {
         /** 包类型标识 */
         public static final Type<ServerInstalledPayload> TYPE = new Type<>(SERVER_INSTALLED_ID);

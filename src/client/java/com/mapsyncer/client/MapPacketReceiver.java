@@ -13,7 +13,14 @@ import org.slf4j.LoggerFactory;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
+import java.util.BitSet;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -77,16 +84,20 @@ public class MapPacketReceiver {
     });
 
     /** 每 tick 最多刷新多少个 Xaero region，避免同步时集中反射刷新导致掉帧。 */
-    private static final int MAX_REGION_LOADS_PER_TICK = 1;
+    private static final int REGION_RELOAD_BATCH_SIZE = 10;
+    private static final long REGION_RELOAD_BATCH_DELAY_MS = 2_000;
 
     /** 等待在客户端主线程触发 Xaero 刷新的 region 队列。 */
     private static final ConcurrentLinkedQueue<PendingRegionLoad> pendingRegionLoads = new ConcurrentLinkedQueue<>();
 
     /** 用于丢弃断线、取消或新同步开始后遗留的旧同步任务。 */
     private static final AtomicLong syncGeneration = new AtomicLong();
+    private static final Map<String, IncomingRegionParts> incomingRegionParts = new ConcurrentHashMap<>();
+    private static final Map<Path, List<Path>> cacheDirectoriesByMwDir = new ConcurrentHashMap<>();
 
     private static volatile boolean completionPending = false;
     private static volatile int completionRegionCount = 0;
+    private static volatile long lastRegionReloadFlushMillis = 0;
 
     /** 同步期间更新的区域坐标集合（仅存储坐标，不存储数据，节省内存） */
     private static final Set<XaeroMapIntegrator.RegionCoord> updatedRegionCoords = ConcurrentHashMap.newKeySet();
@@ -133,6 +144,11 @@ public class MapPacketReceiver {
         completionRegionCount = 0;
         pendingRegionLoads.clear();
         loadedRegions.clear();
+        lastRegionReloadFlushMillis = 0;
+        Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
+        cleanupPartFiles();
+        cleanupStalePartFiles(serverDir);
+        cacheDirectoriesByMwDir.clear();
         clearReceivedChunks();
         LOGGER.info("Cleared sync data to prevent memory leak");
     }
@@ -241,8 +257,12 @@ public class MapPacketReceiver {
                 updatedRegionCoords.clear();
                 loadedRegions.clear();
                 pendingRegionLoads.clear();
+                cleanupPartFiles();
+                cleanupStalePartFiles(serverDir);
+                cacheDirectoriesByMwDir.clear();
                 completionPending = false;
                 completionRegionCount = 0;
+                lastRegionReloadFlushMillis = System.currentTimeMillis();
                 LOGGER.info("Starting sync (background streaming mode, generation={})", generation);
                 initializeReflectionCache();
             }
@@ -291,12 +311,46 @@ public class MapPacketReceiver {
                 SyncProgressTracker.update(payload.processed(), payload.total(), payload.status()));
     }
 
+    public static void handleSyncRegionPart(PacketHandler.SyncRegionPartPayload payload,
+            ClientPlayNetworking.Context context) {
+        Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
+        boolean isCaveDimension = context.client().level != null && context.client().level.dimension() == Level.NETHER;
+        String currentXaeroDim = context.client().level != null
+                ? DimensionPathMapping.getInstance().toXaeroDimension(context.client().level.dimension().identifier().toString())
+                : null;
+
+        if (!syncInProgress) {
+            syncInProgress = true;
+            syncStartTime = System.currentTimeMillis();
+            syncGeneration.incrementAndGet();
+            lastRegionReloadFlushMillis = System.currentTimeMillis();
+            initializeReflectionCache();
+        }
+
+        long generation = syncGeneration.get();
+        SYNC_WORKER.execute(() -> processRegionPartOnWorker(
+                payload, serverDir, isCaveDimension, currentXaeroDim, generation));
+    }
+
+    public static void handleSyncRegionComplete(PacketHandler.SyncRegionCompletePayload payload,
+            ClientPlayNetworking.Context context) {
+        Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
+        boolean isCaveDimension = context.client().level != null && context.client().level.dimension() == Level.NETHER;
+        String currentXaeroDim = context.client().level != null
+                ? DimensionPathMapping.getInstance().toXaeroDimension(context.client().level.dimension().identifier().toString())
+                : null;
+        long generation = syncGeneration.get();
+        SYNC_WORKER.execute(() -> processRegionCompleteOnWorker(
+                context.client(), payload, serverDir, isCaveDimension, currentXaeroDim, generation));
+    }
+
     /**
      * 同步完成后恢复区块更新状态。
      * 不再使用全局暂停机制。
      */
     private static void resumeChunkUpdates() {
         syncInProgress = false;
+        ClientTimestampCache.saveCurrent();
         LOGGER.info("Sync complete");
     }
 
@@ -314,7 +368,6 @@ public class MapPacketReceiver {
         }
 
         try {
-            boolean cacheDirty = false;
             ClientTimestampCache tsCache = getTimestampCacheOnWorker(serverDir);
 
             for (ChunkMapData chunk : chunks) {
@@ -331,6 +384,7 @@ public class MapPacketReceiver {
                     mwDir = XaeroMapIntegrator.writeChunkDataAndGetMwDir(chunk, serverDir, serverWorldId);
                     if (mwDir != null) {
                         lastMwDir = mwDir;
+                        cacheDirectoriesByMwDir.remove(mwDir);
                     }
                 } else {
                     LOGGER.warn("Skipping map write because server directory is unavailable");
@@ -340,7 +394,7 @@ public class MapPacketReceiver {
                     String relativePath = buildRelativePathForCache(chunk);
                     String hash = HashUtils.computeHash(chunk.data);
                     tsCache.update(relativePath, chunk.timestampSeconds, hash);
-                    cacheDirty = true;
+                    tsCache.saveDeferred();
                 }
 
                 boolean shouldProcess = isCaveDimension
@@ -364,15 +418,13 @@ public class MapPacketReceiver {
                 }
             }
 
-            if (tsCache != null && cacheDirty) {
-                tsCache.save();
-            }
-
             if (isComplete) {
                 int totalReceived = updatedRegionCoords.size();
                 if (tsCache != null) {
                     tsCache.markSyncComplete();
                 }
+                cleanupPartFiles();
+                cleanupStalePartFiles(serverDir);
 
                 client.execute(() -> {
                     if (generation != syncGeneration.get()) {
@@ -402,6 +454,163 @@ public class MapPacketReceiver {
                 : null;
     }
 
+    private static void processRegionPartOnWorker(PacketHandler.SyncRegionPartPayload payload,
+            Path serverDir, boolean isCaveDimension, String currentXaeroDim, long generation) {
+        if (generation != syncGeneration.get() || serverDir == null) {
+            return;
+        }
+
+        ChunkMapData chunk = new ChunkMapData(payload.regionX(), payload.regionZ(), payload.dimension(),
+                new byte[0], payload.timestampSeconds(), payload.caveLayer());
+        XaeroMapIntegrator.RegionFileTarget target =
+                XaeroMapIntegrator.resolveRegionFileTarget(chunk, serverDir, payload.worldId());
+        if (target == null) {
+            return;
+        }
+        if (payload.totalParts() <= 0 || payload.totalBytes() < 0
+                || payload.byteOffset() < 0 || payload.byteOffset() + payload.data().length > payload.totalBytes()) {
+            return;
+        }
+
+        try {
+            Files.createDirectories(target.targetDir());
+            String key = payload.syncId() + "|" + payload.regionKey();
+            IncomingRegionParts parts = incomingRegionParts.computeIfAbsent(key, ignored ->
+                    new IncomingRegionParts(target.partFile(), target.outputFile(), payload.totalParts(),
+                            payload.totalBytes(), payload.timestampSeconds(), payload.hash(), chunk));
+            if (!parts.matches(payload, target)) {
+                cleanupIncomingPart(key, parts);
+                return;
+            }
+            if (payload.partIndex() < 0 || payload.partIndex() >= parts.totalParts) {
+                cleanupIncomingPart(key, parts);
+                return;
+            }
+            if (parts.received.get(payload.partIndex())) {
+                return;
+            }
+            if (parts.receivedBytes + payload.data().length > parts.totalBytes) {
+                cleanupIncomingPart(key, parts);
+                return;
+            }
+
+            try (SeekableByteChannel channel = Files.newByteChannel(parts.partFile,
+                    StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                channel.position(payload.byteOffset());
+                channel.write(ByteBuffer.wrap(payload.data()));
+            }
+            parts.received.set(payload.partIndex());
+            parts.receivedBytes += payload.data().length;
+        } catch (Exception e) {
+            LOGGER.error("Failed to write region part {}", payload.regionKey(), e);
+        }
+    }
+
+    private static void processRegionCompleteOnWorker(Minecraft client,
+            PacketHandler.SyncRegionCompletePayload payload, Path serverDir,
+            boolean isCaveDimension, String currentXaeroDim, long generation) {
+        if (generation != syncGeneration.get() || serverDir == null) {
+            return;
+        }
+
+        String key = payload.syncId() + "|" + payload.regionKey();
+        IncomingRegionParts parts = incomingRegionParts.remove(key);
+        if (parts == null) {
+            LOGGER.warn("Missing part state for completed region {}", payload.regionKey());
+            return;
+        }
+
+        try {
+            if (parts.received.cardinality() != payload.totalParts()
+                    || Files.size(parts.partFile) != payload.totalBytes()) {
+                cleanupIncomingPart(key, parts);
+                LOGGER.warn("Incomplete region parts for {}", payload.regionKey());
+                return;
+            }
+
+            String hash = HashUtils.computeFileHash(parts.partFile);
+            if (!hash.equals(payload.hash())) {
+                cleanupIncomingPart(key, parts);
+                LOGGER.warn("Hash mismatch for region {}: {} != {}", payload.regionKey(), hash, payload.hash());
+                return;
+            }
+
+            Files.createDirectories(parts.outputFile.getParent());
+            Path mwDir = parts.chunk.caveLayer == Integer.MAX_VALUE
+                    ? parts.outputFile.getParent()
+                    : parts.outputFile.getParent().getParent().getParent();
+            try {
+                Files.move(parts.partFile, parts.outputFile,
+                        StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(parts.partFile, parts.outputFile, StandardCopyOption.REPLACE_EXISTING);
+            }
+
+            lastMwDir = mwDir;
+            cacheDirectoriesByMwDir.remove(mwDir);
+
+            ClientTimestampCache tsCache = getTimestampCacheOnWorker(serverDir);
+            if (tsCache != null) {
+                tsCache.update(payload.regionKey(), payload.timestampSeconds(), payload.hash());
+                tsCache.saveDeferred();
+            }
+
+            XaeroMapIntegrator.RegionCoord coord = new XaeroMapIntegrator.RegionCoord(
+                    payload.regionX(), payload.regionZ(), payload.caveLayer());
+            updatedRegionCoords.add(coord);
+            clearSingleRegionCache(coord, lastMwDir);
+            boolean shouldProcess = isCaveDimension
+                    ? (payload.caveLayer() != Integer.MAX_VALUE)
+                    : (payload.caveLayer() == Integer.MAX_VALUE);
+            if (shouldProcess && currentXaeroDim != null && currentXaeroDim.equals(payload.dimension())) {
+                Set<XaeroMapIntegrator.RegionCoord> viewRegions =
+                        XaeroMapIntegrator.getViewDistanceRegions(payload.caveLayer());
+                if (viewRegions.contains(coord)) {
+                    pendingRegionLoads.offer(new PendingRegionLoad(coord, payload.caveLayer(), true, generation));
+                }
+            }
+        } catch (Exception e) {
+            cleanupIncomingPart(key, parts);
+            LOGGER.error("Failed to complete region parts {}", payload.regionKey(), e);
+        }
+    }
+
+    private static void cleanupIncomingPart(String key, IncomingRegionParts parts) {
+        incomingRegionParts.remove(key);
+        try {
+            Files.deleteIfExists(parts.partFile);
+        } catch (Exception e) {
+            LOGGER.debug("Failed to delete part file {}", parts.partFile, e);
+        }
+    }
+
+    private static void cleanupPartFiles() {
+        for (Map.Entry<String, IncomingRegionParts> entry : incomingRegionParts.entrySet()) {
+            cleanupIncomingPart(entry.getKey(), entry.getValue());
+        }
+        incomingRegionParts.clear();
+    }
+
+    private static void cleanupStalePartFiles(Path serverDir) {
+        if (serverDir == null || !Files.exists(serverDir)) {
+            return;
+        }
+
+        try (var stream = Files.walk(serverDir)) {
+            stream.filter(path -> path.getFileName() != null
+                            && path.getFileName().toString().endsWith(".zip.part"))
+                    .forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (Exception e) {
+                            LOGGER.debug("Failed to delete stale part file {}", path, e);
+                        }
+                    });
+        } catch (Exception e) {
+            LOGGER.debug("Failed to scan stale part files under {}", serverDir, e);
+        }
+    }
+
     private static void markSyncCompleteOnWorker(Path serverDir) {
         SYNC_WORKER.execute(() -> {
             ClientTimestampCache tsCache = getTimestampCacheOnWorker(serverDir);
@@ -422,9 +631,22 @@ public class MapPacketReceiver {
 
     public static void onClientTick(Minecraft client) {
         long generation = syncGeneration.get();
-        int processed = 0;
+        if (pendingRegionLoads.isEmpty()) {
+            tryCompleteSyncOnClient(generation);
+            return;
+        }
 
-        while (processed < MAX_REGION_LOADS_PER_TICK) {
+        long now = System.currentTimeMillis();
+        boolean shouldFlush = completionPending
+                || pendingRegionLoads.size() >= REGION_RELOAD_BATCH_SIZE
+                || now - lastRegionReloadFlushMillis >= REGION_RELOAD_BATCH_DELAY_MS;
+        if (!shouldFlush) {
+            tryCompleteSyncOnClient(generation);
+            return;
+        }
+
+        int processed = 0;
+        while (processed < REGION_RELOAD_BATCH_SIZE) {
             PendingRegionLoad pending = pendingRegionLoads.poll();
             if (pending == null) {
                 break;
@@ -435,6 +657,9 @@ public class MapPacketReceiver {
 
             triggerSingleRegionLoad(pending.coord(), pending.caveLayer(), pending.inViewDistance());
             processed++;
+        }
+        if (processed > 0) {
+            lastRegionReloadFlushMillis = now;
         }
 
         tryCompleteSyncOnClient(generation);
@@ -467,6 +692,10 @@ public class MapPacketReceiver {
         updatedRegionCoords.clear();
         loadedRegions.clear();
         pendingRegionLoads.clear();
+        ClientTimestampCache.saveCurrent();
+        cleanupPartFiles();
+        cleanupStalePartFiles(XaeroMapIntegrator.getCurrentServerDirectory());
+        cacheDirectoriesByMwDir.clear();
         completionPending = false;
         completionRegionCount = 0;
         lastMwDir = null;
@@ -621,7 +850,7 @@ public class MapPacketReceiver {
         if (mwDir == null) return;
 
         String cacheFileName = coord.x() + "_" + coord.z() + ".xwmc";
-        List<Path> cacheDirs = findCacheDirectories(mwDir);
+        List<Path> cacheDirs = cacheDirectoriesByMwDir.computeIfAbsent(mwDir, MapPacketReceiver::findCacheDirectories);
 
         for (Path cacheDir : cacheDirs) {
             Path cacheFile = cacheDir.resolve(cacheFileName);
@@ -641,6 +870,38 @@ public class MapPacketReceiver {
                                      int caveLayer,
                                      boolean inViewDistance,
                                      long generation) {
+    }
+
+    private static class IncomingRegionParts {
+        final Path partFile;
+        final Path outputFile;
+        final int totalParts;
+        final long totalBytes;
+        final long timestampSeconds;
+        final String hash;
+        final ChunkMapData chunk;
+        final BitSet received;
+        long receivedBytes;
+
+        IncomingRegionParts(Path partFile, Path outputFile, int totalParts, long totalBytes,
+                long timestampSeconds, String hash, ChunkMapData chunk) {
+            this.partFile = partFile;
+            this.outputFile = outputFile;
+            this.totalParts = totalParts;
+            this.totalBytes = totalBytes;
+            this.timestampSeconds = timestampSeconds;
+            this.hash = hash;
+            this.chunk = chunk;
+            this.received = new BitSet(totalParts);
+        }
+
+        boolean matches(PacketHandler.SyncRegionPartPayload payload, XaeroMapIntegrator.RegionFileTarget target) {
+            return totalParts == payload.totalParts()
+                    && totalBytes == payload.totalBytes()
+                    && timestampSeconds == payload.timestampSeconds()
+                    && hash.equals(payload.hash())
+                    && outputFile.equals(target.outputFile());
+        }
     }
 
     /**

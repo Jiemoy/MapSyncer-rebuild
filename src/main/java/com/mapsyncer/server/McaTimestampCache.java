@@ -12,6 +12,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Properties;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 
 /**
  * MCA文件时间戳缓存 - 用于检测文件是否更新，触发增量重新生成
@@ -26,6 +27,7 @@ public class McaTimestampCache {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(McaTimestampCache.class);
     private static final String CACHE_FILE_NAME = "mca_timestamps.cache";
+    private static final Pattern REGION_FILE_PATTERN = Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.mc[ar]$");
 
     /** 维度 -> 区域坐标 -> 最后修改时间 (毫秒) */
     private final Map<String, Map<String, Long>> timestampCache = new ConcurrentHashMap<>();
@@ -299,7 +301,7 @@ public class McaTimestampCache {
         try (java.nio.file.DirectoryStream<Path> stream = Files.newDirectoryStream(regionDir)) {
             for (Path mcaFile : stream) {
                 String fileName = mcaFile.getFileName().toString();
-                java.util.regex.Matcher matcher = java.util.regex.Pattern.compile("^r\\.(-?[0-9]+)\\.(-?[0-9]+)\\.mc[ar]$").matcher(fileName);
+                java.util.regex.Matcher matcher = REGION_FILE_PATTERN.matcher(fileName);
 
                 if (matcher.matches()) {
                     int regionX = Integer.parseInt(matcher.group(1));

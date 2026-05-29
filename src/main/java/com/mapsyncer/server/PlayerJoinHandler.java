@@ -5,6 +5,7 @@ import com.mapsyncer.config.ModConfig.UpdateMode;
 import com.mapsyncer.network.PacketHandler;
 import com.mapsyncer.MapSyncer;
 import com.mapsyncer.util.BlockColorMapper;
+import com.mapsyncer.util.MapSyncerExecutors;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -84,6 +85,7 @@ public class PlayerJoinHandler {
         // Clear sync tracking data
         ServerSyncHandler.cleanup();
         VoxySyncHandler.cleanup();
+        MapSyncerExecutors.shutdown();
 
         LOGGER.info("Singleton cache cleanup completed");
     }

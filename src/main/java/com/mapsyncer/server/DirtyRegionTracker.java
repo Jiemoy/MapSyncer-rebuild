@@ -3,7 +3,6 @@ package com.mapsyncer.server;
 import com.mapsyncer.config.ModConfig;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
-import net.minecraft.resources.Identifier;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.Level;
@@ -11,11 +10,10 @@ import net.minecraft.world.level.Level;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
-import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class DirtyRegionTracker {
-    private static final Set<DirtyRegion> DIRTY_REGIONS = ConcurrentHashMap.newKeySet();
+    private static final ConcurrentHashMap<DirtyRegionKey, DirtyRegion> DIRTY_REGIONS = new ConcurrentHashMap<>();
 
     private DirtyRegionTracker() {
     }
@@ -26,8 +24,13 @@ public final class DirtyRegionTracker {
         }
 
         ChunkPos chunkPos = ChunkPos.containing(pos);
-        Identifier dimensionId = level.dimension().identifier();
-        DIRTY_REGIONS.add(new DirtyRegion(dimensionId.toString(), chunkPos.getRegionX(), chunkPos.getRegionZ()));
+        ResourceKey<Level> dimension = level.dimension();
+        int regionX = chunkPos.getRegionX();
+        int regionZ = chunkPos.getRegionZ();
+        long now = System.currentTimeMillis();
+        DirtyRegionKey key = new DirtyRegionKey(dimension, regionX, regionZ);
+        DIRTY_REGIONS.compute(key, (ignored, existing) ->
+                new DirtyRegion(dimension, regionX, regionZ, now));
     }
 
     public static List<DirtyRegion> takeSnapshot(int maxCount) {
@@ -36,7 +39,7 @@ public final class DirtyRegionTracker {
         }
 
         List<DirtyRegion> snapshot = new ArrayList<>(Math.min(maxCount, DIRTY_REGIONS.size()));
-        for (DirtyRegion region : DIRTY_REGIONS) {
+        for (DirtyRegion region : DIRTY_REGIONS.values()) {
             snapshot.add(region);
             if (snapshot.size() >= maxCount) {
                 break;
@@ -46,7 +49,10 @@ public final class DirtyRegionTracker {
     }
 
     public static void markProcessed(DirtyRegion region) {
-        DIRTY_REGIONS.remove(region);
+        if (region == null) {
+            return;
+        }
+        DIRTY_REGIONS.remove(region.key(), region);
     }
 
     public static void clear() {
@@ -61,13 +67,20 @@ public final class DirtyRegionTracker {
         return DIRTY_REGIONS.size();
     }
 
-    public record DirtyRegion(String dimensionId, int regionX, int regionZ) {
+    private record DirtyRegionKey(ResourceKey<Level> dimension, int regionX, int regionZ) {
+    }
+
+    public record DirtyRegion(ResourceKey<Level> dimension, int regionX, int regionZ, long latestDirtyAtMillis) {
         public boolean matches(ResourceKey<Level> dimension) {
-            return dimension != null && Objects.equals(dimension.identifier().toString(), dimensionId);
+            return Objects.equals(this.dimension, dimension);
         }
 
         public RegionScanner.RegionCoords toRegionCoords() {
             return new RegionScanner.RegionCoords(regionX, regionZ);
+        }
+
+        private DirtyRegionKey key() {
+            return new DirtyRegionKey(dimension, regionX, regionZ);
         }
     }
 }

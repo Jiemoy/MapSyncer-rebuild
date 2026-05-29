@@ -1,5 +1,6 @@
 package com.mapsyncer.nbt;
 
+import com.mapsyncer.util.BoundedStringPool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -327,7 +328,7 @@ public class NbtReader implements AutoCloseable {
         utfData[1] = (byte) (utfLength & 0xFF);
         in.readFully(utfData, 2, utfLength);
         try (DataInputStream utfIn = new DataInputStream(new ByteArrayInputStream(utfData))) {
-            return utfIn.readUTF();
+            return BoundedStringPool.canonicalize(utfIn.readUTF());
         } catch (OutOfMemoryError e) {
             throw new IOException("Failed to decode NBT string: Java heap space", e);
         }

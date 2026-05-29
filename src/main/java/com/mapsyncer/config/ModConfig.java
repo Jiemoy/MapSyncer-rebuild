@@ -59,6 +59,10 @@ public class ModConfig {
                         SERVER.maxDirtyRegionsPerIncrementalRun = 512;
                         needsSave = true;
                     }
+                    if (!root.has("incrementalForceSaveBeforeScan")) {
+                        SERVER.incrementalForceSaveBeforeScan = true;
+                        needsSave = true;
+                    }
                 }
                 if (needsSave) {
                     save();
@@ -161,6 +165,7 @@ public class ModConfig {
         public boolean enableDirtyRegionTracking = true;
         public boolean dirtyRegionFallbackFullScan = true;
         public int maxDirtyRegionsPerIncrementalRun = 512;
+        public boolean incrementalForceSaveBeforeScan = true;
 
         // Dimension scan settings
         public ScanMode defaultScanMode = ScanMode.SURFACE;
@@ -190,6 +195,7 @@ public class ModConfig {
             this.dirtyRegionFallbackFullScan = other.dirtyRegionFallbackFullScan;
             this.maxDirtyRegionsPerIncrementalRun = other.maxDirtyRegionsPerIncrementalRun > 0
                     ? other.maxDirtyRegionsPerIncrementalRun : 512;
+            this.incrementalForceSaveBeforeScan = other.incrementalForceSaveBeforeScan;
             this.defaultScanMode = other.defaultScanMode != null ? other.defaultScanMode : ScanMode.SURFACE;
             this.defaultCaveStart = other.defaultCaveStart;
             this.dimensionConfigs = other.dimensionConfigs != null && !other.dimensionConfigs.isEmpty()

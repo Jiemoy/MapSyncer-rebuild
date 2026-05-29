@@ -24,9 +24,13 @@ import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Stream;
 
 /**
@@ -46,6 +50,7 @@ public class ConversionOrchestrator {
 
     /** 是否正在运行转换任务 */
     private static volatile boolean isRunning = false;
+    private static final AtomicBoolean RUN_LOCK = new AtomicBoolean(false);
 
     /** 已处理的区域数量 */
     private static volatile int processedCount = 0;
@@ -126,17 +131,29 @@ public class ConversionOrchestrator {
         return timestampCache;
     }
 
+    private static boolean tryStartRun() {
+        if (!RUN_LOCK.compareAndSet(false, true)) {
+            LOGGER.warn("Conversion already in progress");
+            return false;
+        }
+        isRunning = true;
+        return true;
+    }
+
+    private static void releaseRun() {
+        isRunning = false;
+        RUN_LOCK.set(false);
+    }
+
     /**
      * 执行全量转换 - 转换服务器所有维度的所有区域
      *
      * @param server Minecraft服务器实例
      */
     public static void generateAll(MinecraftServer server) {
-        if (isRunning) {
-            LOGGER.warn("Conversion already in progress");
+        if (!tryStartRun()) {
             return;
         }
-        isRunning = true;
         processedCount = 0;
         skippedCount = 0;
         completedDimensions = new ArrayList<>();  // 重置已完成维度列表
@@ -144,7 +161,7 @@ public class ConversionOrchestrator {
         // Step 1: Force save all chunks to disk before reading .mca files
         if (!saveAllChunks(server)) {
             LOGGER.error("Failed to save all chunks, aborting map generation");
-            isRunning = false;
+            releaseRun();
             return;
         }
 
@@ -153,7 +170,7 @@ public class ConversionOrchestrator {
         int totalSkippedEmpty = allRegions.stream().mapToInt(DimensionRegions::skippedEmptyCount).sum();
         if (totalCount == 0) {
             LOGGER.info("No regions found to convert");
-            isRunning = false;
+            releaseRun();
             return;
         }
         LOGGER.info("Starting conversion of {} regions across {} dimensions", totalCount, allRegions.size());
@@ -162,7 +179,7 @@ public class ConversionOrchestrator {
                 convertDimension(server, dimRegions, false);
             }
         } finally {
-            isRunning = false;
+            releaseRun();
             currentStatus = "completed";
             LOGGER.info("Conversion completed: {}/{} regions, {} skipped (empty MCA)", processedCount, totalCount, totalSkippedEmpty);
         }
@@ -177,22 +194,20 @@ public class ConversionOrchestrator {
      * @param dimensionId 维度ID（如"minecraft:overworld"）
      */
     public static void generateDimension(MinecraftServer server, String dimensionId) {
-        if (isRunning) {
-            LOGGER.warn("Conversion already in progress");
+        if (!tryStartRun()) {
             return;
         }
-        isRunning = true;
         processedCount = 0;
         skippedCount = 0;
         ResourceKey<Level> dimKey = parseDimensionId(dimensionId, server);
-        if (dimKey == null) { LOGGER.error("Unknown dimension: {}", dimensionId); isRunning = false; return; }
+        if (dimKey == null) { LOGGER.error("Unknown dimension: {}", dimensionId); releaseRun(); return; }
         ServerLevel level = server.getLevel(dimKey);
-        if (level == null) { LOGGER.error("Level not loaded for dimension: {}", dimensionId); isRunning = false; return; }
+        if (level == null) { LOGGER.error("Level not loaded for dimension: {}", dimensionId); releaseRun(); return; }
 
         // Force save all chunks before reading .mca files
         if (!saveAllChunks(server)) {
             LOGGER.error("Failed to save all chunks, aborting map generation");
-            isRunning = false;
+            releaseRun();
             return;
         }
 
@@ -203,7 +218,7 @@ public class ConversionOrchestrator {
         try {
             convertDimension(server, new DimensionRegions(dimKey, regions, scanResult.skippedEmptyCount()), false);
         } finally {
-            isRunning = false;
+            releaseRun();
             currentStatus = "completed";
         }
     }
@@ -217,17 +232,15 @@ public class ConversionOrchestrator {
      * @param dimensionId 维度ID（如"minecraft:overworld"）
      */
     public static void generateDimensionForce(MinecraftServer server, String dimensionId) {
-        if (isRunning) {
-            LOGGER.warn("Conversion already in progress");
+        if (!tryStartRun()) {
             return;
         }
-        isRunning = true;
         processedCount = 0;
         skippedCount = 0;
         ResourceKey<Level> dimKey = parseDimensionId(dimensionId, server);
-        if (dimKey == null) { LOGGER.error("Unknown dimension: {}", dimensionId); isRunning = false; return; }
+        if (dimKey == null) { LOGGER.error("Unknown dimension: {}", dimensionId); releaseRun(); return; }
         ServerLevel level = server.getLevel(dimKey);
-        if (level == null) { LOGGER.error("Level not loaded for dimension: {}", dimensionId); isRunning = false; return; }
+        if (level == null) { LOGGER.error("Level not loaded for dimension: {}", dimensionId); releaseRun(); return; }
 
         // 强制生成前先清除该维度的缓存目录
         String fullDimId = dimKey.identifier().toString(); // 完整维度 ID（包含 namespace）
@@ -238,7 +251,7 @@ public class ConversionOrchestrator {
         // Force save all chunks before reading .mca files
         if (!saveAllChunks(server)) {
             LOGGER.error("Failed to save all chunks, aborting map generation");
-            isRunning = false;
+            releaseRun();
             return;
         }
 
@@ -249,7 +262,7 @@ public class ConversionOrchestrator {
         try {
             convertDimension(server, new DimensionRegions(dimKey, regions, scanResult.skippedEmptyCount()), true);
         } finally {
-            isRunning = false;
+            releaseRun();
             currentStatus = "completed";
         }
     }
@@ -285,7 +298,7 @@ public class ConversionOrchestrator {
      * @return 转换结果状态
      */
     public static SingleRegionResult generateSingleRegion(MinecraftServer server, ResourceKey<Level> dimension, int regionX, int regionZ) {
-        if (isRunning) {
+        if (RUN_LOCK.get()) {
             LOGGER.warn("Conversion already in progress");
             return SingleRegionResult.ALREADY_RUNNING;
         }
@@ -297,17 +310,19 @@ public class ConversionOrchestrator {
             return SingleRegionResult.REGION_NOT_FOUND;
         }
 
-        isRunning = true;
+        if (!tryStartRun()) {
+            return SingleRegionResult.ALREADY_RUNNING;
+        }
         totalCount = 1;
         processedCount = 0;
         currentDimension = dimension;
         ServerLevel level = server.getLevel(dimension);
-        if (level == null) { LOGGER.error("Level not loaded for dimension: {}", dimension); isRunning = false; return SingleRegionResult.CONVERSION_FAILED; }
+        if (level == null) { LOGGER.error("Level not loaded for dimension: {}", dimension); releaseRun(); return SingleRegionResult.CONVERSION_FAILED; }
 
         // Force save all chunks before reading .mca files
         if (!saveAllChunks(server)) {
             LOGGER.error("Failed to save all chunks, aborting map generation");
-            isRunning = false;
+            releaseRun();
             return SingleRegionResult.CONVERSION_FAILED;
         }
 
@@ -328,7 +343,7 @@ public class ConversionOrchestrator {
 
         if (regionDir == null) {
             LOGGER.error("Region directory not found for dimension: {}", dimension);
-            isRunning = false;
+            releaseRun();
             return SingleRegionResult.CONVERSION_FAILED;
         }
 
@@ -380,7 +395,7 @@ public class ConversionOrchestrator {
             result = SingleRegionResult.CONVERSION_FAILED;
         }
         finally {
-            isRunning = false;
+            releaseRun();
             currentStatus = "completed";
         }
         return result;
@@ -468,6 +483,7 @@ public class ConversionOrchestrator {
         List<RegionCoords> needsUpdate = force ? dimRegions.regions() : mcaCache.scanAndUpdate(dimPath, regionDir);
 
         List<RegionCoords> regions = dimRegions.regions();
+        Set<RegionCoords> regionSet = new HashSet<>(regions);
         LOGGER.info("Dimension {}: {} total regions, {} need update (force={})", dimPath, regions.size(), needsUpdate.size(), force);
 
         List<RegionCoords> failedRegions = new ArrayList<>();
@@ -477,7 +493,7 @@ public class ConversionOrchestrator {
         // 使用独立 MCA 解析器转换需要更新的区域（更快，不加载 chunks）
         for (RegionCoords coords : needsUpdate) {
             // 检查是否在区域列表中
-            if (!regions.contains(coords)) {
+            if (!regionSet.contains(coords)) {
                 continue;
             }
 
@@ -692,29 +708,36 @@ public class ConversionOrchestrator {
      * @param server Minecraft服务器实例
      */
     public static void performIncrementalScan(MinecraftServer server) {
-        if (isRunning) {
+        if (!tryStartRun()) {
             LOGGER.debug("Conversion already in progress, skipping incremental scan");
             return;
         }
 
-        // Save chunks before scanning to ensure MCA files are up-to-date
-        // This is called from server thread via ServerTickEvent, so direct call is safe
         try {
-            server.saveEverything(false, true, true);
-        } catch (Exception e) {
-            LOGGER.error("Failed to save chunks for incremental scan", e);
-            return;
-        }
-
-        List<DimensionRegions> allRegions = RegionScanner.scanAllDimensions(server);
-        McaTimestampCache mcaCache = getTimestampCache();
-        GenerationCache genCache = GenerationCache.getInstance(CACHE_DIR);
-        int totalUpdated = 0;
-        long generationTimeSeconds = System.currentTimeMillis() / 1000;
         List<DirtyRegionTracker.DirtyRegion> dirtySnapshot = ModConfig.SERVER.enableDirtyRegionTracking
                 ? DirtyRegionTracker.takeSnapshot(ModConfig.SERVER.maxDirtyRegionsPerIncrementalRun)
                 : List.of();
         boolean useDirtySnapshot = !dirtySnapshot.isEmpty();
+        if (!useDirtySnapshot && !ModConfig.SERVER.dirtyRegionFallbackFullScan) {
+            LOGGER.debug("No dirty regions queued and fallback full scan is disabled");
+            releaseRun();
+            return;
+        }
+
+        boolean forceSaveBeforeScan = ModConfig.SERVER.incrementalForceSaveBeforeScan;
+        if (forceSaveBeforeScan && !saveAllChunks(server)) {
+            LOGGER.error("Failed to save chunks for incremental scan");
+            releaseRun();
+            return;
+        }
+
+        List<DimensionRegions> allRegions = useDirtySnapshot
+                ? buildDirtyDimensionRegions(dirtySnapshot)
+                : RegionScanner.scanAllDimensions(server);
+        McaTimestampCache mcaCache = getTimestampCache();
+        GenerationCache genCache = GenerationCache.getInstance(CACHE_DIR);
+        int totalUpdated = 0;
+        long generationTimeSeconds = System.currentTimeMillis() / 1000;
         if (useDirtySnapshot) {
             LOGGER.info("Incremental update using {} dirty regions ({} still queued)",
                     dirtySnapshot.size(), DirtyRegionTracker.dirtyCount());
@@ -797,7 +820,14 @@ public class ConversionOrchestrator {
             for (RegionCoords coords : needsUpdate) {
                 Path mcaPath = regionDir.resolve("r." + coords.x() + "." + coords.z() + ".mca");
                 if (!Files.exists(mcaPath)) {
-                    markDirtyProcessed(dirtyForDimension, coords);
+                    if (forceSaveBeforeScan) {
+                        markDirtyProcessed(dirtyForDimension, coords);
+                    }
+                    continue;
+                }
+
+                DirtyRegionTracker.DirtyRegion dirtyRegion = findDirtyRegion(dirtyForDimension, coords);
+                if (!forceSaveBeforeScan && dirtyRegion != null && !isDirtyRegionReady(mcaPath, dirtyRegion)) {
                     continue;
                 }
 
@@ -832,6 +862,58 @@ public class ConversionOrchestrator {
             LOGGER.info("Incremental scan completed: {} regions updated", totalUpdated);
             mcaCache.saveCache();
             genCache.save();
+        }
+        currentStatus = "completed";
+        releaseRun();
+        } catch (Exception e) {
+            LOGGER.error("Unexpected error during incremental scan", e);
+        } finally {
+            if (RUN_LOCK.get()) {
+                releaseRun();
+            }
+        }
+    }
+
+    private static List<DimensionRegions> buildDirtyDimensionRegions(List<DirtyRegionTracker.DirtyRegion> dirtySnapshot) {
+        Map<ResourceKey<Level>, LinkedHashSet<RegionCoords>> byDimension = new HashMap<>();
+        for (DirtyRegionTracker.DirtyRegion dirty : dirtySnapshot) {
+            byDimension.computeIfAbsent(dirty.dimension(), ignored -> new LinkedHashSet<>())
+                    .add(dirty.toRegionCoords());
+        }
+
+        List<DimensionRegions> result = new ArrayList<>(byDimension.size());
+        for (Map.Entry<ResourceKey<Level>, LinkedHashSet<RegionCoords>> entry : byDimension.entrySet()) {
+            result.add(new DimensionRegions(entry.getKey(), new ArrayList<>(entry.getValue()), 0));
+        }
+        return result;
+    }
+
+    private static DirtyRegionTracker.DirtyRegion findDirtyRegion(
+            Set<DirtyRegionTracker.DirtyRegion> dirtyRegions, RegionCoords coords) {
+        if (dirtyRegions == null || dirtyRegions.isEmpty()) {
+            return null;
+        }
+        for (DirtyRegionTracker.DirtyRegion dirty : dirtyRegions) {
+            if (dirty.regionX() == coords.x() && dirty.regionZ() == coords.z()) {
+                return dirty;
+            }
+        }
+        return null;
+    }
+
+    private static boolean isDirtyRegionReady(Path mcaPath, DirtyRegionTracker.DirtyRegion dirtyRegion) {
+        try {
+            long mcaModifiedMillis = Files.getLastModifiedTime(mcaPath).toMillis();
+            if (mcaModifiedMillis < dirtyRegion.latestDirtyAtMillis()) {
+                LOGGER.debug("Deferring dirty region ({}, {}) in {}: MCA mtime {} < dirty time {}",
+                        dirtyRegion.regionX(), dirtyRegion.regionZ(), dirtyRegion.dimension().identifier(),
+                        mcaModifiedMillis, dirtyRegion.latestDirtyAtMillis());
+                return false;
+            }
+            return true;
+        } catch (IOException e) {
+            LOGGER.warn("Could not read MCA timestamp for {}, keeping dirty flag", mcaPath);
+            return false;
         }
     }
 

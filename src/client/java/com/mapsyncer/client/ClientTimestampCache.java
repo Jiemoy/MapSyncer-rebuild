@@ -48,6 +48,8 @@ public class ClientTimestampCache {
     private static final String KEY_STATE = "_state";
     private static final String KEY_DIMENSIONS = "_dimensions";
     private static final String KEY_COMMAND = "_command";
+    private static final int SAVE_EVERY_UPDATES = 50;
+    private static final long SAVE_EVERY_MS = 10_000L;
 
     /** 同步状态：同步进行中（断点续传可用） */
     public static final String SYNC_STATE_IN_PROGRESS = "in_progress";
@@ -84,6 +86,8 @@ public class ClientTimestampCache {
 
     /** 同步指令（用于断点续传提示） */
     private volatile String syncCommand = "";
+    private int unsavedUpdates = 0;
+    private long lastSaveMillis = 0L;
 
     /**
      * 缓存条目：时间戳(秒) + CRC32哈希。
@@ -114,6 +118,7 @@ public class ClientTimestampCache {
     private ClientTimestampCache(Path baseDir) {
         this.cacheFile = baseDir.resolve(CACHE_FILE_NAME);
         load();
+        this.lastSaveMillis = System.currentTimeMillis();
     }
 
     /**
@@ -145,6 +150,12 @@ public class ClientTimestampCache {
             instance = null;
             lastBaseDir = null;
             LOGGER.info("ClientTimestampCache instance reset");
+        }
+    }
+
+    public static synchronized void saveCurrent() {
+        if (instance != null) {
+            instance.save();
         }
     }
 
@@ -236,8 +247,18 @@ public class ClientTimestampCache {
             }
 
             LOGGER.debug("Saved cache: state={}, regions={}", syncState, cache.size());
+            unsavedUpdates = 0;
+            lastSaveMillis = System.currentTimeMillis();
         } catch (Exception e) {
             LOGGER.warn("Failed to save cache file: {}", e.getMessage());
+        }
+    }
+
+    public synchronized void saveDeferred() {
+        unsavedUpdates++;
+        long now = System.currentTimeMillis();
+        if (unsavedUpdates >= SAVE_EVERY_UPDATES || now - lastSaveMillis >= SAVE_EVERY_MS) {
+            save();
         }
     }
 

@@ -8,6 +8,7 @@ import com.mapsyncer.server.GenerationCache.RegionMeta;
 import com.mapsyncer.util.ChatUtils;
 import com.mapsyncer.util.DimensionPathMapping;
 import com.mapsyncer.util.HashUtils;
+import com.mapsyncer.util.MapSyncerExecutors;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.Commands;
@@ -25,12 +26,14 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Future;
 import java.util.stream.Stream;
 
 /**
@@ -179,6 +182,46 @@ public class ServerSyncHandler {
         return packetCount;
     }
 
+    private static int getPartDataSize() {
+        return Math.max(64 * 1024, getMaxPacketSize() - 4096);
+    }
+
+    private static boolean sendRegionParts(String syncId, RegionSyncInfo info, ChunkMapData chunk,
+            ServerPlayer serverPlayer, int worldId, UUID playerId) {
+        int partSize = getPartDataSize();
+        int totalParts = Math.max(1, (chunk.data.length + partSize - 1) / partSize);
+        long totalBytes = chunk.data.length;
+        String hash = HashUtils.computeHash(chunk.data);
+
+        for (int partIndex = 0; partIndex < totalParts; partIndex++) {
+            if (Thread.currentThread().isInterrupted() || !isPlayerStillValid(serverPlayer)) {
+                return false;
+            }
+
+            int offset = partIndex * partSize;
+            int end = Math.min(offset + partSize, chunk.data.length);
+            byte[] partData = Arrays.copyOfRange(chunk.data, offset, end);
+            PacketHandler.SyncRegionPartPayload payload = new PacketHandler.SyncRegionPartPayload(
+                    syncId, worldId, info.normalizedPath(), chunk.dimension, chunk.regionX, chunk.regionZ,
+                    chunk.caveLayer, partIndex, totalParts, offset, totalBytes, chunk.timestampSeconds,
+                    hash, partData);
+
+            serverPlayer.level().getServer().execute(() ->
+                    ServerPlayNetworking.send(serverPlayer, payload));
+
+            if (!applySpeedLimit(partData.length, serverPlayer, playerId)) {
+                return false;
+            }
+        }
+
+        PacketHandler.SyncRegionCompletePayload completePayload = new PacketHandler.SyncRegionCompletePayload(
+                syncId, worldId, info.normalizedPath(), chunk.dimension, chunk.regionX, chunk.regionZ,
+                chunk.caveLayer, totalParts, totalBytes, chunk.timestampSeconds, hash);
+        serverPlayer.level().getServer().execute(() ->
+                ServerPlayNetworking.send(serverPlayer, completePayload));
+        return true;
+    }
+
     /** 正在同步的玩家集合（用于断线或维度切换时中断同步） */
     private static final Set<UUID> syncingPlayers = ConcurrentHashMap.newKeySet();
 
@@ -186,7 +229,7 @@ public class ServerSyncHandler {
     private static final Map<UUID, ResourceKey<Level>> playerSyncDimensions = new ConcurrentHashMap<>();
 
     /** 玩家同步线程引用（用于断线时立即中断线程） */
-    private static final Map<UUID, Thread> syncThreads = new ConcurrentHashMap<>();
+    private static final Map<UUID, Future<?>> syncTasks = new ConcurrentHashMap<>();
 
     /** 限速统计：累计发送字节数 */
     private static final Map<UUID, Long> speedLimitBytesSent = new ConcurrentHashMap<>();
@@ -234,6 +277,12 @@ public class ServerSyncHandler {
         PayloadTypeRegistry.clientboundPlay().register(
                 PacketHandler.SyncProgressPayload.TYPE,
                 PacketHandler.SyncProgressPayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(
+                PacketHandler.SyncRegionPartPayload.TYPE,
+                PacketHandler.SyncRegionPartPayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(
+                PacketHandler.SyncRegionCompletePayload.TYPE,
+                PacketHandler.SyncRegionCompletePayload.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(
                 PacketHandler.ServerInstalledPayload.TYPE,
                 PacketHandler.ServerInstalledPayload.STREAM_CODEC);
@@ -309,10 +358,10 @@ public class ServerSyncHandler {
         clearSpeedLimitState(playerId);
 
         // 立即中断同步线程
-        Thread syncThread = syncThreads.remove(playerId);
-        if (syncThread != null && syncThread.isAlive()) {
-            syncThread.interrupt();
-            LOGGER.info("Player {} disconnected, sync thread interrupted", playerId);
+        Future<?> syncTask = syncTasks.remove(playerId);
+        if (syncTask != null && !syncTask.isDone()) {
+            syncTask.cancel(true);
+            LOGGER.info("Player {} disconnected, sync task cancelled", playerId);
         }
     }
 
@@ -499,7 +548,7 @@ public class ServerSyncHandler {
     private static void cleanupSyncState(UUID playerId) {
         syncingPlayers.remove(playerId);
         playerSyncDimensions.remove(playerId);
-        syncThreads.remove(playerId);
+        syncTasks.remove(playerId);
         clearSpeedLimitState(playerId);
     }
 
@@ -520,10 +569,10 @@ public class ServerSyncHandler {
         UUID playerId = serverPlayer.getUUID();
 
         // 如果玩家已经在同步中，先中断旧的同步线程
-        Thread oldThread = syncThreads.get(playerId);
-        if (oldThread != null && oldThread.isAlive()) {
+        Future<?> oldTask = syncTasks.get(playerId);
+        if (oldTask != null && !oldTask.isDone()) {
             LOGGER.info("Player {} requested new sync while syncing, interrupting old sync", playerId);
-            oldThread.interrupt();
+            oldTask.cancel(true);
             cleanupSyncState(playerId);
         }
 
@@ -537,12 +586,10 @@ public class ServerSyncHandler {
         Map<String, ClientMeta> clientMeta = payload.clientMeta();
 
         // 将耗时操作移到异步线程执行，避免阻塞主线程
-        Thread syncThread = new Thread(() -> processSyncAsync(serverPlayer, playerId, clientMeta, startDimension),
-                "mapsyncer-sync-" + playerId);
-        syncThread.setDaemon(true);
-        syncThreads.put(playerId, syncThread);  // 存储线程引用，用于断线时中断
-        syncThread.start();
-        LOGGER.info("Started async sync thread for player {}", serverPlayer.getName().getString());
+        Future<?> syncTask = MapSyncerExecutors.submitSync(() ->
+                processSyncAsync(serverPlayer, playerId, clientMeta, startDimension));
+        syncTasks.put(playerId, syncTask);
+        LOGGER.info("Started async sync task for player {}", serverPlayer.getName().getString());
     }
 
     /**
@@ -751,6 +798,7 @@ public class ServerSyncHandler {
         });
 
         // 流式处理：逐个读取数据并发送，避免一次性加载所有数据到内存
+        String syncId = UUID.randomUUID().toString();
         List<ChunkMapData> batch = new ArrayList<>();
         int batchBytes = 0;
         int processed = 0;
@@ -770,16 +818,41 @@ public class ServerSyncHandler {
                 continue;
             }
 
+            if (chunk.data.length > getMaxPacketSize()) {
+                if (!batch.isEmpty()) {
+                    if (!applySpeedLimit(batchBytes, serverPlayer, playerId)) {
+                        LOGGER.info("Player {} disconnected during speed limit, aborting sync", playerId);
+                        cleanupSyncState(playerId);
+                        return;
+                    }
+                    sendBatchInChunks(batch, batchBytes, serverPlayer, worldId, processed, total);
+                    processed += batch.size();
+                    batch.clear();
+                    batchBytes = 0;
+                }
+
+                if (!sendRegionParts(syncId, info, chunk, serverPlayer, worldId, playerId)) {
+                    LOGGER.info("Player {} disconnected while sending region parts, aborting sync", playerId);
+                    cleanupSyncState(playerId);
+                    return;
+                }
+                processed++;
+                final int partProgress = processed;
+                serverPlayer.level().getServer().execute(() ->
+                        ServerPlayNetworking.send(serverPlayer,
+                                new PacketHandler.SyncProgressPayload(partProgress, total,
+                                        String.format("Sending regions %d/%d", partProgress, total))));
+                continue;
+            }
+
             // 累积到批次阈值后发送（拆成多个包，每个包不超过maxPacketSize）
             if (batchBytes + chunk.data.length > batchThreshold && !batch.isEmpty()) {
-                // 执行速度限制
                 if (!applySpeedLimit(batchBytes, serverPlayer, playerId)) {
                     LOGGER.info("Player {} disconnected during speed limit, aborting sync", playerId);
                     cleanupSyncState(playerId);
                     return;
                 }
 
-                // 拆包发送
                 sendBatchInChunks(batch, batchBytes, serverPlayer, worldId, processed, total);
                 processed += batch.size();
 
@@ -797,75 +870,24 @@ public class ServerSyncHandler {
             return;
         }
 
-        // Send final batch
         if (!batch.isEmpty()) {
-            // 对最终批次也执行速度限制
             if (!applySpeedLimit(batchBytes, serverPlayer, playerId)) {
                 LOGGER.info("Player {} disconnected during final speed limit, aborting sync", playerId);
                 cleanupSyncState(playerId);
                 return;
             }
 
-            // 拆包发送最终批次
-            int maxPacketSize = getMaxPacketSize();
-            if (batchBytes <= maxPacketSize) {
-                // 单包发送，标记完成
-                final List<ChunkMapData> finalBatch = new ArrayList<>(batch);
-                final int finalTotal = total;
-                serverPlayer.level().getServer().execute(() -> {
-                    ServerPlayNetworking.send(serverPlayer,
-                            new PacketHandler.SyncResponsePayload(finalBatch, true, worldId, "ok"));
-                    ServerPlayNetworking.send(serverPlayer,
-                            new PacketHandler.SyncProgressPayload(finalTotal, finalTotal, "completed"));
-                    serverPlayer.sendSystemMessage(ChatUtils.success("mapsyncer.server.sync_complete", finalTotal));
-                });
-            } else {
-                // 拆成多个包发送，最后一个标记完成
-                List<ChunkMapData> currentChunk = new ArrayList<>();
-                int currentSize = 0;
+            sendBatchInChunks(batch, batchBytes, serverPlayer, worldId, processed, total);
+        }
 
-                for (ChunkMapData chunk : batch) {
-                    if (currentSize + chunk.data.length > maxPacketSize && !currentChunk.isEmpty()) {
-                        final List<ChunkMapData> chunkToSend = new ArrayList<>(currentChunk);
-                        final int sentProgress = processed;
-                        serverPlayer.level().getServer().execute(() -> {
-                            ServerPlayNetworking.send(serverPlayer,
-                                    new PacketHandler.SyncResponsePayload(chunkToSend, false, worldId, "ok"));
-                            ServerPlayNetworking.send(serverPlayer,
-                                    new PacketHandler.SyncProgressPayload(sentProgress, total,
-                                            String.format("Sending regions %d/%d", sentProgress, total)));
-                        });
-                        processed += currentChunk.size();
-
-                        currentChunk.clear();
-                        currentSize = 0;
-                    }
-
-                    currentChunk.add(chunk);
-                    currentSize += chunk.data.length;
-                }
-
-                // 发送最后一个包，标记完成
-                if (!currentChunk.isEmpty()) {
-                    final List<ChunkMapData> lastChunk = new ArrayList<>(currentChunk);
-                    final int finalTotal = total;
-                    serverPlayer.level().getServer().execute(() -> {
-                        ServerPlayNetworking.send(serverPlayer,
-                                new PacketHandler.SyncResponsePayload(lastChunk, true, worldId, "ok"));
-                        ServerPlayNetworking.send(serverPlayer,
-                                new PacketHandler.SyncProgressPayload(finalTotal, finalTotal, "completed"));
-                        serverPlayer.sendSystemMessage(ChatUtils.success("mapsyncer.server.sync_complete", finalTotal));
-                    });
-                }
-            }
-        } else {
-            // 没有数据要发送，但仍需发送完成消息
+        final int finalTotal = total;
             serverPlayer.level().getServer().execute(() -> {
                 ServerPlayNetworking.send(serverPlayer,
-                        new PacketHandler.SyncProgressPayload(total, total, "completed"));
-                serverPlayer.sendSystemMessage(ChatUtils.success("mapsyncer.server.sync_complete", total));
+                        new PacketHandler.SyncResponsePayload(List.of(), true, worldId, "ok"));
+                ServerPlayNetworking.send(serverPlayer,
+                        new PacketHandler.SyncProgressPayload(finalTotal, finalTotal, "completed"));
+                serverPlayer.sendSystemMessage(ChatUtils.success("mapsyncer.server.sync_complete", finalTotal));
             });
-        }
 
         LOGGER.info("Map sync complete for player {}: {} regions", serverPlayer.getName().getString(), total);
 
@@ -935,7 +957,7 @@ public class ServerSyncHandler {
     public static void cleanup() {
         syncingPlayers.clear();
         playerSyncDimensions.clear();
-        syncThreads.clear();
+        syncTasks.clear();
         speedLimitBytesSent.clear();
         speedLimitCycleStart.clear();
         LOGGER.info("ServerSyncHandler tracking data cleared");
@@ -965,9 +987,9 @@ public class ServerSyncHandler {
             playerSyncDimensions.remove(playerId);
 
             // 中断同步线程（如果仍在运行）
-            Thread syncThread = syncThreads.remove(playerId);
-            if (syncThread != null && syncThread.isAlive()) {
-                syncThread.interrupt();
+            Future<?> syncTask = syncTasks.remove(playerId);
+            if (syncTask != null && !syncTask.isDone()) {
+                syncTask.cancel(true);
             }
 
             clearSpeedLimitState(playerId);

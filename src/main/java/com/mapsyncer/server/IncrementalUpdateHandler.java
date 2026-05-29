@@ -2,6 +2,7 @@ package com.mapsyncer.server;
 
 import com.mapsyncer.config.ModConfig;
 import com.mapsyncer.config.ModConfig.UpdateMode;
+import com.mapsyncer.util.MapSyncerExecutors;
 import net.minecraft.server.MinecraftServer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -180,19 +181,22 @@ public class IncrementalUpdateHandler {
      * @param reason 更新原因描述
      */
     private void performScheduledUpdate(String reason) {
-        LOGGER.info("Performing incremental update: {}", reason);
+        LOGGER.info("Queueing incremental update: {}", reason);
 
-        try {
-            ConversionOrchestrator.performIncrementalScan(server);
-        } catch (Exception e) {
-            LOGGER.error("Error during scheduled incremental update", e);
-        }
+        MapSyncerExecutors.submitConversion(() -> {
+            try {
+                ConversionOrchestrator.performIncrementalScan(server);
+            } catch (Exception e) {
+                LOGGER.error("Error during scheduled incremental update", e);
+            }
 
-        // 检查是否有玩家在线，无人则停止处理器节省资源
-        if (server.getPlayerList().getPlayerCount() == 0) {
-            LOGGER.info("No players online after incremental update, stopping handler to save resources");
-            stop();
-        }
+            server.execute(() -> {
+                if (server.getPlayerList().getPlayerCount() == 0) {
+                    LOGGER.info("No players online after incremental update, stopping handler to save resources");
+                    stop();
+                }
+            });
+        });
     }
 
     /**

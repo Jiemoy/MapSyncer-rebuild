@@ -77,6 +77,7 @@ public class ClientJoinHandler {
     public static void onClientDisconnect(Minecraft client) {
         LOGGER.info("Player disconnecting from server");
         MapPacketReceiver.resetServerStatus();
+        ClientTimestampCache.saveCurrent();
     }
 
     public static void handleServerInstalled(PacketHandler.ServerInstalledPayload payload,

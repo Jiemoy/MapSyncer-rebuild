@@ -1,6 +1,7 @@
 package com.mapsyncer.mca;
 
 import com.mapsyncer.nbt.Tag;
+import com.mapsyncer.util.BoundedStringPool;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -24,6 +25,9 @@ import java.util.Map;
  * @see BlockState 方块状态记录
  */
 public class ChunkSectionParser {
+    private static final Map<String, String> EMPTY_PROPERTIES = Map.of();
+    private static final BlockState AIR_STATE = new BlockState("minecraft:air", EMPTY_PROPERTIES);
+    private static final String DEFAULT_BIOME = "minecraft:the_void";
 
     /**
      * 方块状态数据记录（包含名称和属性）
@@ -275,7 +279,7 @@ public class ChunkSectionParser {
                 Tag.ListTag paletteList = biomes.getList("palette", Tag.TAG_STRING);
                 for (int i = 0; i < paletteList.items().size(); i++) {
                     Tag.StringTag biomeTag = (Tag.StringTag) paletteList.items().get(i);
-                    biomePalette.add(biomeTag.value());
+                    biomePalette.add(BoundedStringPool.canonicalize(biomeTag.value()));
                 }
             }
 
@@ -309,16 +313,21 @@ public class ChunkSectionParser {
      * @return 解析后的BlockState对象
      */
     private static BlockState parseBlockState(Tag.Compound stateTag) {
-        String name = stateTag.getString("Name");
-        Map<String, String> properties = new LinkedHashMap<>();
+        String name = BoundedStringPool.canonicalize(stateTag.getString("Name"));
+        Map<String, String> properties = EMPTY_PROPERTIES;
 
         if (stateTag.contains("Properties", Tag.TAG_COMPOUND)) {
             Tag.Compound propsTag = stateTag.getCompound("Properties");
+            properties = new LinkedHashMap<>();
             for (Map.Entry<String, Tag> entry : propsTag.children().entrySet()) {
                 Tag propTag = entry.getValue();
                 if (propTag instanceof Tag.StringTag str) {
-                    properties.put(entry.getKey(), str.value());
+                    properties.put(BoundedStringPool.canonicalize(entry.getKey()),
+                            BoundedStringPool.canonicalize(str.value()));
                 }
+            }
+            if (properties.isEmpty()) {
+                properties = EMPTY_PROPERTIES;
             }
         }
 
@@ -382,7 +391,7 @@ public class ChunkSectionParser {
      */
     public static BlockState getBlockStateAt(SectionData section, int x, int y, int z) {
         if (section.blockPalette.isEmpty()) {
-            return new BlockState("minecraft:air", Map.of());
+            return AIR_STATE;
         }
 
         // 单方块palette
@@ -392,7 +401,7 @@ public class ChunkSectionParser {
 
         // 无数据
         if (section.blockData == null || section.blockBitsPerEntry == 0) {
-            return new BlockState("minecraft:air", Map.of());
+            return AIR_STATE;
         }
 
         // 计算索引 (YZX顺序)
@@ -402,7 +411,7 @@ public class ChunkSectionParser {
         int paletteIndex = readBitsFromArray(section.blockData, blockIndex, section.blockBitsPerEntry);
 
         if (paletteIndex < 0 || paletteIndex >= section.blockPalette.size()) {
-            return new BlockState("minecraft:air", Map.of());
+            return AIR_STATE;
         }
 
         return section.blockPalette.get(paletteIndex);
@@ -466,7 +475,7 @@ public class ChunkSectionParser {
         // 参考 Xaero WorldDataReader: 默认使用 THE_VOID biome
         // 当 biomePalette 为空时返回 THE_VOID（虚空区域的深紫色）
         if (section.biomePalette.isEmpty()) {
-            return "minecraft:the_void";
+            return DEFAULT_BIOME;
         }
 
         // 单生物群系palette
@@ -476,7 +485,7 @@ public class ChunkSectionParser {
 
         // 无数据时返回 THE_VOID（默认值）
         if (section.biomeData == null || section.biomeBitsPerEntry == 0) {
-            return "minecraft:the_void";
+            return DEFAULT_BIOME;
         }
 
         // 标准计算：voxelIndex = (y/4)*16 + (z/4)*4 + (x/4)

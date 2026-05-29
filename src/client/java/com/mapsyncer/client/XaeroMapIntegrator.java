@@ -729,7 +729,32 @@ public class XaeroMapIntegrator {
      * @param worldId worldId
      * @return mw 目录路径
      */
+    public record RegionFileTarget(Path mwDir, Path targetDir, Path outputFile) {
+        public Path partFile() {
+            return outputFile.resolveSibling(outputFile.getFileName().toString() + ".part");
+        }
+    }
+
+    public static RegionFileTarget resolveRegionFileTarget(ChunkMapData chunk, Path serverDir, int worldId) {
+        if (serverDir == null) {
+            return null;
+        }
+
+        String xaeroDim = chunk.dimension;
+        Path dimDir = serverDir.resolve(xaeroDim);
+        Path mwDir = dimDir.resolve("mw$" + worldId);
+        Path targetDir = chunk.caveLayer == Integer.MAX_VALUE
+                ? mwDir
+                : mwDir.resolve("caves").resolve(String.valueOf(chunk.caveLayer));
+        Path outputFile = targetDir.resolve(chunk.regionX + "_" + chunk.regionZ + ".zip");
+        return new RegionFileTarget(mwDir, targetDir, outputFile);
+    }
+
     private static Path writeChunkDataAndGetDir(ChunkMapData chunk, Path serverDir, int worldId) {
+        RegionFileTarget resolvedTarget = resolveRegionFileTarget(chunk, serverDir, worldId);
+        if (resolvedTarget == null) {
+            return null;
+        }
         // chunk.dimension 已经是 Xaero 格式，直接使用
         // 注意：服务端发送的 dimension 就是 Xaero 格式（如 null, DIM-1, DIM1, twilightforest$twilight_forest）
         String xaeroDim = chunk.dimension;
@@ -747,6 +772,9 @@ public class XaeroMapIntegrator {
         }
 
         Path outputFile = targetDir.resolve(chunk.regionX + "_" + chunk.regionZ + ".zip");
+        targetDir = resolvedTarget.targetDir();
+        outputFile = resolvedTarget.outputFile();
+        mwDir = resolvedTarget.mwDir();
         Path tempFile = targetDir.resolve(chunk.regionX + "_" + chunk.regionZ + ".zip.temp");
 
         try {

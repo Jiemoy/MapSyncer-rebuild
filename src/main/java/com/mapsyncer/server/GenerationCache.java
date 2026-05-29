@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * 生成缓存 - 缓存每个region的生成时间戳和CRC32哈希值
@@ -34,7 +35,7 @@ public class GenerationCache {
     private final Path cacheFile;
 
     /** 缓存数据：relativePath -> RegionMeta */
-    private final Map<String, RegionMeta> cache = new HashMap<>();
+    private final Map<String, RegionMeta> cache = new ConcurrentHashMap<>();
 
     /**
      * Region元数据：时间戳(秒) + CRC32哈希
@@ -109,7 +110,7 @@ public class GenerationCache {
      */
     public void save() {
         Map<String, TimestampHashEntry> toSave = new HashMap<>();
-        for (Map.Entry<String, RegionMeta> entry : cache.entrySet()) {
+        for (Map.Entry<String, RegionMeta> entry : getAll().entrySet()) {
             toSave.put(entry.getKey(), new TimestampHashEntry(entry.getValue().timestampSeconds(), entry.getValue().hash()));
         }
         PropertiesCacheIO.save(cacheFile, toSave, TimestampHashEntry::format,
@@ -161,7 +162,7 @@ public class GenerationCache {
      * @return 缓存数据的不可修改视图
      */
     public Map<String, RegionMeta> getAll() {
-        return Collections.unmodifiableMap(cache);
+        return Collections.unmodifiableMap(new HashMap<>(cache));
     }
 
     /**

@@ -29,6 +29,12 @@ public class MapSyncerClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(PacketHandler.SyncProgressPayload.TYPE,
                 (payload, context) -> MapPacketReceiver.handleSyncProgress(payload, context));
 
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.SyncRegionPartPayload.TYPE,
+                (payload, context) -> MapPacketReceiver.handleSyncRegionPart(payload, context));
+
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.SyncRegionCompletePayload.TYPE,
+                (payload, context) -> MapPacketReceiver.handleSyncRegionComplete(payload, context));
+
         ClientPlayNetworking.registerGlobalReceiver(PacketHandler.ServerInstalledPayload.TYPE,
                 (payload, context) -> {
                     MapPacketReceiver.handleServerInstalled(payload, context);
