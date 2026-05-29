@@ -48,6 +48,7 @@ public class PlayerJoinHandler {
 
         // 发送服务端已安装通知给客户端
         ServerPlayNetworking.send(player, new PacketHandler.ServerInstalledPayload(MapSyncer.VERSION));
+        ServerSyncHandler.sendPublicWaypoints(player);
 
         UpdateMode mode = ModConfig.SERVER.incrementalUpdateMode;
         if (!ConversionOrchestrator.isRunning() && mode != UpdateMode.DISABLED) {

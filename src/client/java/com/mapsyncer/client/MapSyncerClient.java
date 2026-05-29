@@ -48,6 +48,9 @@ public class MapSyncerClient implements ClientModInitializer {
                 (payload, context) -> context.client().execute(() ->
                         context.client().setScreen(new MapSyncerScreen())));
 
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.PublicWaypointsPayload.TYPE,
+                PublicWaypointReceiver::handle);
+
         ClientPlayNetworking.registerGlobalReceiver(PacketHandler.VoxyCapabilityPayload.TYPE,
                 VoxySyncClient::handleCapability);
 

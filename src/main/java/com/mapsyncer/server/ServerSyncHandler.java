@@ -1,6 +1,7 @@
 package com.mapsyncer.server;
 
 import com.mapsyncer.config.ModConfig;
+import com.mapsyncer.config.ModConfig.RadiusSyncCenterMode;
 import com.mapsyncer.network.ChunkMapData;
 import com.mapsyncer.network.ClientMeta;
 import com.mapsyncer.network.PacketHandler;
@@ -12,6 +13,7 @@ import com.mapsyncer.util.MapSyncerExecutors;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.commands.Commands;
+import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
@@ -259,6 +261,25 @@ public class ServerSyncHandler {
         }
     }
 
+    private record SyncFilter(String xaeroDimension, int centerX, int centerY, int centerZ,
+                              int radiusBlocks, String centerDescription, boolean clamped) {
+        boolean includes(RegionSyncInfo info) {
+            if (!xaeroDimension.equals(info.dimension())) {
+                return false;
+            }
+            int minX = info.regionX() * 512;
+            int maxX = minX + 511;
+            int minZ = info.regionZ() * 512;
+            int maxZ = minZ + 511;
+            int nearestX = Math.max(minX, Math.min(centerX, maxX));
+            int nearestZ = Math.max(minZ, Math.min(centerZ, maxZ));
+            long dx = (long) nearestX - centerX;
+            long dz = (long) nearestZ - centerZ;
+            long radius = radiusBlocks;
+            return dx * dx + dz * dz <= radius * radius;
+        }
+    }
+
     /**
      * 注册网络数据包处理器
      *
@@ -271,6 +292,9 @@ public class ServerSyncHandler {
         PayloadTypeRegistry.serverboundPlay().register(
                 PacketHandler.SyncRequestPayload.TYPE,
                 PacketHandler.SyncRequestPayload.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(
+                PacketHandler.RadiusSyncRequestPayload.TYPE,
+                PacketHandler.RadiusSyncRequestPayload.STREAM_CODEC);
         PayloadTypeRegistry.clientboundPlay().register(
                 PacketHandler.SyncResponsePayload.TYPE,
                 PacketHandler.SyncResponsePayload.STREAM_CODEC);
@@ -295,11 +319,21 @@ public class ServerSyncHandler {
         PayloadTypeRegistry.clientboundPlay().register(
                 PacketHandler.OpenGuiPayload.TYPE,
                 PacketHandler.OpenGuiPayload.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(
+                PacketHandler.AdminSettingsUpdatePayload.TYPE,
+                PacketHandler.AdminSettingsUpdatePayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(
+                PacketHandler.PublicWaypointsPayload.TYPE,
+                PacketHandler.PublicWaypointsPayload.STREAM_CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(PacketHandler.SyncRequestPayload.TYPE,
                 (payload, context) -> handleSyncRequest(payload, context));
+        ServerPlayNetworking.registerGlobalReceiver(PacketHandler.RadiusSyncRequestPayload.TYPE,
+                (payload, context) -> handleRadiusSyncRequest(payload, context));
         ServerPlayNetworking.registerGlobalReceiver(PacketHandler.AdminStatusRequestPayload.TYPE,
                 (payload, context) -> handleAdminStatusRequest(context));
+        ServerPlayNetworking.registerGlobalReceiver(PacketHandler.AdminSettingsUpdatePayload.TYPE,
+                (payload, context) -> handleAdminSettingsUpdate(payload, context));
     }
 
     private static void handleAdminStatusRequest(ServerPlayNetworking.Context context) {
@@ -307,11 +341,38 @@ public class ServerSyncHandler {
         player.level().getServer().execute(() -> sendAdminStatus(player));
     }
 
+    private static void handleAdminSettingsUpdate(PacketHandler.AdminSettingsUpdatePayload payload,
+                                                  ServerPlayNetworking.Context context) {
+        ServerPlayer player = context.player();
+        player.level().getServer().execute(() -> {
+            if (!Commands.LEVEL_OWNERS.check(player.permissions())) {
+                sendAdminStatus(player);
+                return;
+            }
+            ModConfig.SERVER.enableRadiusSync = payload.radiusSyncEnabled();
+            ModConfig.SERVER.maxRadiusSyncBlocks = Math.max(1, Math.min(100_000, payload.maxRadiusSyncBlocks()));
+            try {
+                ModConfig.SERVER.radiusSyncCenterMode = RadiusSyncCenterMode.valueOf(payload.radiusSyncCenterMode());
+            } catch (IllegalArgumentException e) {
+                ModConfig.SERVER.radiusSyncCenterMode = RadiusSyncCenterMode.PLAYER_POSITION;
+            }
+            ModConfig.SERVER.radiusSyncFixedDimension = payload.radiusSyncFixedDimension() == null
+                    || payload.radiusSyncFixedDimension().isBlank()
+                    ? "minecraft:overworld" : payload.radiusSyncFixedDimension();
+            ModConfig.SERVER.radiusSyncFixedX = payload.radiusSyncFixedX();
+            ModConfig.SERVER.radiusSyncFixedY = payload.radiusSyncFixedY();
+            ModConfig.SERVER.radiusSyncFixedZ = payload.radiusSyncFixedZ();
+            ModConfig.save();
+            sendAdminStatus(player);
+        });
+    }
+
     private static void sendAdminStatus(ServerPlayer player) {
         boolean allowed = Commands.LEVEL_OWNERS.check(player.permissions());
         if (!allowed) {
             ServerPlayNetworking.send(player, new PacketHandler.AdminStatusPayload(
                     false, false, 0, 0, 0, 0, 0, 0, 0, 0L, 0,
+                    false, 0, RadiusSyncCenterMode.PLAYER_POSITION.name(), "minecraft:overworld", 0, 64, 0,
                     "permission_denied", "", ""));
             return;
         }
@@ -335,10 +396,24 @@ public class ServerSyncHandler {
                 cacheRegionCount,
                 cacheSizeBytes,
                 ModConfig.SERVER.syncSpeedLimitKBps,
+                ModConfig.SERVER.enableRadiusSync,
+                ModConfig.SERVER.maxRadiusSyncBlocks,
+                ModConfig.SERVER.radiusSyncCenterMode.name(),
+                ModConfig.SERVER.radiusSyncFixedDimension,
+                ModConfig.SERVER.radiusSyncFixedX,
+                ModConfig.SERVER.radiusSyncFixedY,
+                ModConfig.SERVER.radiusSyncFixedZ,
                 ConversionOrchestrator.getStatus(),
                 currentDimensionId,
                 IncrementalUpdateHandler.getInstance().getStatusInfo()
         ));
+    }
+
+    public static void sendPublicWaypoints(ServerPlayer player) {
+        PacketHandler.PublicWaypointsPayload payload = PublicWaypointConfig.createPayload();
+        if (payload != null) {
+            ServerPlayNetworking.send(player, payload);
+        }
     }
 
     /**
@@ -552,6 +627,45 @@ public class ServerSyncHandler {
         clearSpeedLimitState(playerId);
     }
 
+    private static SyncFilter createRadiusFilter(ServerPlayer player, PacketHandler.RadiusSyncRequestPayload payload) {
+        if (!ModConfig.SERVER.enableRadiusSync) {
+            return null;
+        }
+
+        int requestedRadius = Math.max(1, payload.radiusBlocks());
+        int maxRadius = Math.max(1, ModConfig.SERVER.maxRadiusSyncBlocks);
+        int radius = Math.min(requestedRadius, maxRadius);
+        boolean clamped = radius != requestedRadius;
+        RadiusSyncCenterMode mode = ModConfig.SERVER.radiusSyncCenterMode == null
+                ? RadiusSyncCenterMode.PLAYER_POSITION : ModConfig.SERVER.radiusSyncCenterMode;
+
+        String dimensionId = payload.dimensionId();
+        int centerX = payload.playerX();
+        int centerY = payload.playerY();
+        int centerZ = payload.playerZ();
+        String description;
+
+        if (mode == RadiusSyncCenterMode.WORLD_SPAWN) {
+            BlockPos spawn = player.level().getLevelData().getRespawnData().pos();
+            centerX = spawn.getX();
+            centerY = spawn.getY();
+            centerZ = spawn.getZ();
+            dimensionId = player.level().dimension().identifier().toString();
+            description = String.format("server spawn [%s %d %d %d]", dimensionId, centerX, centerY, centerZ);
+        } else if (mode == RadiusSyncCenterMode.FIXED) {
+            dimensionId = ModConfig.SERVER.radiusSyncFixedDimension;
+            centerX = ModConfig.SERVER.radiusSyncFixedX;
+            centerY = ModConfig.SERVER.radiusSyncFixedY;
+            centerZ = ModConfig.SERVER.radiusSyncFixedZ;
+            description = String.format("fixed center [%s %d %d %d]", dimensionId, centerX, centerY, centerZ);
+        } else {
+            description = String.format("your position [%s %d %d %d]", dimensionId, centerX, centerY, centerZ);
+        }
+
+        String xaeroDimension = DimensionPathMapping.getInstance().toXaeroDimension(dimensionId);
+        return new SyncFilter(xaeroDimension, centerX, centerY, centerZ, radius, description, clamped);
+    }
+
     /**
      * 处理客户端同步请求
      *
@@ -565,6 +679,7 @@ public class ServerSyncHandler {
      */
     private static void handleSyncRequest(PacketHandler.SyncRequestPayload payload, ServerPlayNetworking.Context context) {
         ServerPlayer serverPlayer = context.player();
+        sendPublicWaypoints(serverPlayer);
 
         UUID playerId = serverPlayer.getUUID();
 
@@ -587,9 +702,47 @@ public class ServerSyncHandler {
 
         // 将耗时操作移到异步线程执行，避免阻塞主线程
         Future<?> syncTask = MapSyncerExecutors.submitSync(() ->
-                processSyncAsync(serverPlayer, playerId, clientMeta, startDimension));
+                processSyncAsync(serverPlayer, playerId, clientMeta, startDimension, null));
         syncTasks.put(playerId, syncTask);
         LOGGER.info("Started async sync task for player {}", serverPlayer.getName().getString());
+    }
+
+    private static void handleRadiusSyncRequest(PacketHandler.RadiusSyncRequestPayload payload,
+                                                ServerPlayNetworking.Context context) {
+        ServerPlayer serverPlayer = context.player();
+        sendPublicWaypoints(serverPlayer);
+        UUID playerId = serverPlayer.getUUID();
+
+        Future<?> oldTask = syncTasks.get(playerId);
+        if (oldTask != null && !oldTask.isDone()) {
+            LOGGER.info("Player {} requested radius sync while syncing, interrupting old sync", playerId);
+            oldTask.cancel(true);
+            cleanupSyncState(playerId);
+        }
+
+        ResourceKey<Level> startDimension = serverPlayer.level().dimension();
+        syncingPlayers.add(playerId);
+        playerSyncDimensions.put(playerId, startDimension);
+
+        SyncFilter filter = createRadiusFilter(serverPlayer, payload);
+        if (filter == null) {
+            serverPlayer.level().getServer().execute(() -> {
+                ServerPlayNetworking.send(serverPlayer,
+                        new PacketHandler.SyncResponsePayload(List.of(), true, 0, "radius_disabled"));
+                serverPlayer.sendSystemMessage(ChatUtils.error("mapsyncer.server.radius_disabled"));
+            });
+            cleanupSyncState(playerId);
+            return;
+        }
+
+        serverPlayer.level().getServer().execute(() -> serverPlayer.sendSystemMessage(
+                ChatUtils.message("mapsyncer.server.radius_start",
+                        filter.radiusBlocks(), filter.centerDescription(), filter.clamped() ? " (clamped)" : "")));
+
+        Future<?> syncTask = MapSyncerExecutors.submitSync(() ->
+                processSyncAsync(serverPlayer, playerId, payload.clientMeta(), startDimension, filter));
+        syncTasks.put(playerId, syncTask);
+        LOGGER.info("Started async radius sync task for player {}", serverPlayer.getName().getString());
     }
 
     /**
@@ -603,7 +756,7 @@ public class ServerSyncHandler {
      * @param startDimension 开始同步时的维度
      */
     private static void processSyncAsync(ServerPlayer serverPlayer, UUID playerId,
-            Map<String, ClientMeta> clientMeta, ResourceKey<Level> startDimension) {
+            Map<String, ClientMeta> clientMeta, ResourceKey<Level> startDimension, SyncFilter filter) {
 
         // Read worldId from xaeromap.txt (Xaero's official method)
         int worldId = readWorldIdFromXaeroMap(serverPlayer);
@@ -636,16 +789,20 @@ public class ServerSyncHandler {
 
         // Determine which dimensions the client is requesting (based on their metadata keys)
         Set<String> requestedDimensions = new java.util.HashSet<>();
-        for (String key : clientMeta.keySet()) {
-            LOGGER.debug("Client meta key: {}", key);
-            String[] parts = key.split("[/\\\\]");
-            if (parts.length > 1) {
-                String dim = parts[0];
-                if (!key.contains("_placeholder_")) {
-                    requestedDimensions.add(dim);
-                } else {
-                    requestedDimensions.add(dim);
-                    LOGGER.info("Found placeholder for dimension {}, will sync all regions", dim);
+        if (filter != null) {
+            requestedDimensions.add(filter.xaeroDimension());
+        } else {
+            for (String key : clientMeta.keySet()) {
+                LOGGER.debug("Client meta key: {}", key);
+                String[] parts = key.split("[/\\\\]");
+                if (parts.length > 1) {
+                    String dim = parts[0];
+                    if (!key.contains("_placeholder_")) {
+                        requestedDimensions.add(dim);
+                    } else {
+                        requestedDimensions.add(dim);
+                        LOGGER.info("Found placeholder for dimension {}, will sync all regions", dim);
+                    }
                 }
             }
         }
@@ -749,6 +906,9 @@ public class ServerSyncHandler {
                             // 解析路径信息，但不读取数据
                             RegionSyncInfo info = parseRegionInfo(zipPath, normalizedPath, timestamp);
                             if (info != null) {
+                                if (filter != null && !filter.includes(info)) {
+                                    return;
+                                }
                                 regionsToSync.add(info);
                             }
                         }
@@ -759,6 +919,9 @@ public class ServerSyncHandler {
 
         // Count hash matches and timestamp skips
         for (Map.Entry<String, RegionMeta> entry : serverCache.entrySet()) {
+            if (filter != null && !entry.getKey().startsWith(filter.xaeroDimension() + "/")) {
+                continue;
+            }
             ClientMeta cm = clientMeta.get(entry.getKey());
             if (cm != null && entry.getValue().hash().equals(cm.hash())) {
                 hashMatchCount++;

@@ -31,6 +31,8 @@ public class PacketHandler {
     private static final int MAX_DIMENSION_LENGTH = 256;
     private static final int MAX_HASH_LENGTH = 64;
     private static final int MAX_PART_DATA_LENGTH = 1_000_000;
+    private static final int MAX_WAYPOINTS = 10_000;
+    private static final int MAX_WAYPOINT_FIELD_LENGTH = 256;
 
     /** 同步请求包的资源定位符 */
     public static final Identifier SYNC_REQUEST_ID = Identifier.fromNamespaceAndPath(
@@ -45,6 +47,10 @@ public class PacketHandler {
             MapSyncer.MOD_ID, "sync_region_part");
     public static final Identifier SYNC_REGION_COMPLETE_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "sync_region_complete");
+    public static final Identifier RADIUS_SYNC_REQUEST_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "radius_sync_request");
+    public static final Identifier PUBLIC_WAYPOINTS_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "public_waypoints");
 
     /** 服务端已安装通知包的资源定位符 */
     public static final Identifier SERVER_INSTALLED_ID = Identifier.fromNamespaceAndPath(
@@ -53,6 +59,8 @@ public class PacketHandler {
             MapSyncer.MOD_ID, "admin_status_request");
     public static final Identifier ADMIN_STATUS_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "admin_status");
+    public static final Identifier ADMIN_SETTINGS_UPDATE_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "admin_settings_update");
     public static final Identifier OPEN_GUI_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "open_gui");
     public static final Identifier VOXY_CAPABILITY_REQUEST_ID = Identifier.fromNamespaceAndPath(
@@ -127,6 +135,61 @@ public class PacketHandler {
          *
          * @return 包类型标识
          */
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record RadiusSyncRequestPayload(
+            Map<String, ClientMeta> clientMeta,
+            String dimensionId,
+            int radiusBlocks,
+            int playerX,
+            int playerY,
+            int playerZ
+    ) implements CustomPacketPayload {
+        public static final Type<RadiusSyncRequestPayload> TYPE = new Type<>(RADIUS_SYNC_REQUEST_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, RadiusSyncRequestPayload> STREAM_CODEC = StreamCodec.of(
+                RadiusSyncRequestPayload::encode, RadiusSyncRequestPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, RadiusSyncRequestPayload payload) {
+            buf.writeInt(payload.clientMeta.size());
+            for (var entry : payload.clientMeta.entrySet()) {
+                buf.writeUtf(entry.getKey());
+                buf.writeLong(entry.getValue().timestampSeconds());
+                buf.writeUtf(entry.getValue().hash());
+            }
+            buf.writeUtf(payload.dimensionId);
+            buf.writeInt(payload.radiusBlocks);
+            buf.writeInt(payload.playerX);
+            buf.writeInt(payload.playerY);
+            buf.writeInt(payload.playerZ);
+        }
+
+        public static RadiusSyncRequestPayload decode(RegistryFriendlyByteBuf buf) {
+            int size = buf.readInt();
+            if (size < 0 || size > MAX_CLIENT_META_ENTRIES) {
+                throw new IllegalArgumentException("Invalid radius sync metadata count: " + size);
+            }
+            Map<String, ClientMeta> metaMap = new HashMap<>();
+            for (int i = 0; i < size; i++) {
+                String path = buf.readUtf(MAX_PATH_LENGTH);
+                long timestampSeconds = buf.readLong();
+                String hash = buf.readUtf(MAX_HASH_LENGTH);
+                metaMap.put(path, new ClientMeta(timestampSeconds, hash));
+            }
+            return new RadiusSyncRequestPayload(
+                    metaMap,
+                    buf.readUtf(MAX_DIMENSION_LENGTH),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt()
+            );
+        }
+
         @Override
         public Type<? extends CustomPacketPayload> type() {
             return TYPE;
@@ -430,6 +493,13 @@ public class PacketHandler {
             int cacheRegionCount,
             long cacheSizeBytes,
             int syncSpeedLimitKBps,
+            boolean radiusSyncEnabled,
+            int maxRadiusSyncBlocks,
+            String radiusSyncCenterMode,
+            String radiusSyncFixedDimension,
+            int radiusSyncFixedX,
+            int radiusSyncFixedY,
+            int radiusSyncFixedZ,
             String status,
             String currentDimension,
             String incrementalStatus
@@ -451,6 +521,13 @@ public class PacketHandler {
             buf.writeInt(payload.cacheRegionCount);
             buf.writeLong(payload.cacheSizeBytes);
             buf.writeInt(payload.syncSpeedLimitKBps);
+            buf.writeBoolean(payload.radiusSyncEnabled);
+            buf.writeInt(payload.maxRadiusSyncBlocks);
+            buf.writeUtf(payload.radiusSyncCenterMode);
+            buf.writeUtf(payload.radiusSyncFixedDimension);
+            buf.writeInt(payload.radiusSyncFixedX);
+            buf.writeInt(payload.radiusSyncFixedY);
+            buf.writeInt(payload.radiusSyncFixedZ);
             buf.writeUtf(payload.status);
             buf.writeUtf(payload.currentDimension);
             buf.writeUtf(payload.incrementalStatus);
@@ -469,9 +546,58 @@ public class PacketHandler {
                     buf.readInt(),
                     buf.readLong(),
                     buf.readInt(),
+                    buf.readBoolean(),
+                    buf.readInt(),
+                    buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH),
+                    buf.readUtf(MAX_DIMENSION_LENGTH),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
                     buf.readUtf(),
                     buf.readUtf(),
                     buf.readUtf()
+            );
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record AdminSettingsUpdatePayload(
+            boolean radiusSyncEnabled,
+            int maxRadiusSyncBlocks,
+            String radiusSyncCenterMode,
+            String radiusSyncFixedDimension,
+            int radiusSyncFixedX,
+            int radiusSyncFixedY,
+            int radiusSyncFixedZ
+    ) implements CustomPacketPayload {
+        public static final Type<AdminSettingsUpdatePayload> TYPE = new Type<>(ADMIN_SETTINGS_UPDATE_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, AdminSettingsUpdatePayload> STREAM_CODEC = StreamCodec.of(
+                AdminSettingsUpdatePayload::encode, AdminSettingsUpdatePayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, AdminSettingsUpdatePayload payload) {
+            buf.writeBoolean(payload.radiusSyncEnabled);
+            buf.writeInt(payload.maxRadiusSyncBlocks);
+            buf.writeUtf(payload.radiusSyncCenterMode);
+            buf.writeUtf(payload.radiusSyncFixedDimension);
+            buf.writeInt(payload.radiusSyncFixedX);
+            buf.writeInt(payload.radiusSyncFixedY);
+            buf.writeInt(payload.radiusSyncFixedZ);
+        }
+
+        public static AdminSettingsUpdatePayload decode(RegistryFriendlyByteBuf buf) {
+            return new AdminSettingsUpdatePayload(
+                    buf.readBoolean(),
+                    buf.readInt(),
+                    buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH),
+                    buf.readUtf(MAX_DIMENSION_LENGTH),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt()
             );
         }
 
@@ -492,6 +618,89 @@ public class PacketHandler {
 
         public static OpenGuiPayload decode(RegistryFriendlyByteBuf buf) {
             return new OpenGuiPayload();
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record PublicWaypoint(
+            String name,
+            String initial,
+            int x,
+            int y,
+            int z,
+            int color,
+            boolean disabled,
+            String type,
+            String set,
+            String dimension
+    ) {
+        public static void encode(RegistryFriendlyByteBuf buf, PublicWaypoint waypoint) {
+            buf.writeUtf(waypoint.name);
+            buf.writeUtf(waypoint.initial);
+            buf.writeInt(waypoint.x);
+            buf.writeInt(waypoint.y);
+            buf.writeInt(waypoint.z);
+            buf.writeInt(waypoint.color);
+            buf.writeBoolean(waypoint.disabled);
+            buf.writeUtf(waypoint.type);
+            buf.writeUtf(waypoint.set);
+            buf.writeUtf(waypoint.dimension);
+        }
+
+        public static PublicWaypoint decode(RegistryFriendlyByteBuf buf) {
+            return new PublicWaypoint(
+                    buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH),
+                    buf.readUtf(16),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readInt(),
+                    buf.readBoolean(),
+                    buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH),
+                    buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH),
+                    buf.readUtf(MAX_DIMENSION_LENGTH)
+            );
+        }
+    }
+
+    public record PublicWaypointsPayload(
+            String groupName,
+            boolean replaceGroup,
+            String hash,
+            List<PublicWaypoint> waypoints
+    ) implements CustomPacketPayload {
+        public static final Type<PublicWaypointsPayload> TYPE = new Type<>(PUBLIC_WAYPOINTS_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, PublicWaypointsPayload> STREAM_CODEC = StreamCodec.of(
+                PublicWaypointsPayload::encode, PublicWaypointsPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, PublicWaypointsPayload payload) {
+            buf.writeUtf(payload.groupName);
+            buf.writeBoolean(payload.replaceGroup);
+            buf.writeUtf(payload.hash);
+            buf.writeInt(payload.waypoints.size());
+            for (PublicWaypoint waypoint : payload.waypoints) {
+                PublicWaypoint.encode(buf, waypoint);
+            }
+        }
+
+        public static PublicWaypointsPayload decode(RegistryFriendlyByteBuf buf) {
+            String groupName = buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH);
+            boolean replaceGroup = buf.readBoolean();
+            String hash = buf.readUtf(MAX_HASH_LENGTH);
+            int size = buf.readInt();
+            if (size < 0 || size > MAX_WAYPOINTS) {
+                throw new IllegalArgumentException("Invalid public waypoint count: " + size);
+            }
+            List<PublicWaypoint> waypoints = new ArrayList<>();
+            for (int i = 0; i < size; i++) {
+                waypoints.add(PublicWaypoint.decode(buf));
+            }
+            return new PublicWaypointsPayload(groupName, replaceGroup, hash, waypoints);
         }
 
         @Override

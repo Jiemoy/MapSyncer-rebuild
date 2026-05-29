@@ -9,6 +9,7 @@ import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
+import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 
 public class MapSyncerScreen extends Screen {
     private static final int PANEL_WIDTH = 560;
@@ -19,6 +20,8 @@ public class MapSyncerScreen extends Screen {
     private Tab activeTab = Tab.SYNC;
     private Button syncCurrentButton;
     private Button syncAllButton;
+    private Button radiusSyncButton;
+    private Button radiusValueButton;
     private Button voxyButton;
     private Button autoSyncButton;
     private Button hudButton;
@@ -26,7 +29,14 @@ public class MapSyncerScreen extends Screen {
     private Button chatIntervalValueButton;
     private Button incrementalButton;
     private Button forceButton;
+    private Button radiusEnabledButton;
+    private Button radiusModeButton;
+    private Button radiusMaxValueButton;
+    private Button radiusSaveButton;
     private EditBox dimensionBox;
+    private int radiusSyncBlocks = 1000;
+    private int adminRadiusMaxBlocks = 3000;
+    private String adminRadiusMode = "PLAYER_POSITION";
     private long lastAdminPoll;
 
     public MapSyncerScreen() {
@@ -129,10 +139,31 @@ public class MapSyncerScreen extends Screen {
                 Component.translatable("mapsyncer.gui.sync.all"),
                 b -> MapSyncerCommand.sendSyncRequest(Minecraft.getInstance(), "all", true)
         ).bounds(x + buttonWidth + gap, y, buttonWidth, 22).build());
+
+        int radiusY = y + 28;
+        int stepWidth = 32;
+        int valueWidth = Math.min(96, Math.max(72, buttonWidth / 2));
+        int radiusButtonWidth = contentWidth() - stepWidth * 2 - valueWidth - gap * 3;
+        addRenderableWidget(Button.builder(Component.literal("-"), b -> {
+            radiusSyncBlocks = Math.max(128, radiusSyncBlocks - 128);
+            updateSettingsButtonMessages();
+        }).bounds(x, radiusY, stepWidth, 22).build());
+        radiusValueButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
+        }).bounds(x + stepWidth + gap, radiusY, valueWidth, 22).build());
+        radiusValueButton.active = false;
+        addRenderableWidget(Button.builder(Component.literal("+"), b -> {
+            radiusSyncBlocks = Math.min(100_000, radiusSyncBlocks + 128);
+            updateSettingsButtonMessages();
+        }).bounds(x + stepWidth + gap + valueWidth + gap, radiusY, stepWidth, 22).build());
+        radiusSyncButton = addRenderableWidget(Button.builder(
+                Component.translatable("mapsyncer.gui.sync.radius"),
+                b -> MapSyncerCommand.sendRadiusSyncRequest(Minecraft.getInstance(), radiusSyncBlocks)
+        ).bounds(x + stepWidth * 2 + valueWidth + gap * 3, radiusY,
+                Math.max(96, radiusButtonWidth), 22).build());
         voxyButton = addRenderableWidget(Button.builder(
                 Component.translatable("mapsyncer.gui.voxy.sync_current"),
                 b -> VoxySyncClient.startCurrentDimensionSync(Minecraft.getInstance())
-        ).bounds(x, y + 28, contentWidth(), 22).build());
+        ).bounds(x, y + 56, contentWidth(), 22).build());
     }
 
     private void buildAdminWidgets(int panelLeft, int panelTop) {
@@ -203,6 +234,41 @@ public class MapSyncerScreen extends Screen {
                 }
             ).bounds(x, y + 62, buttonWidth, 22).build());
         }
+
+        int settingsY = y + (contentWidth >= 470 ? 68 : 92);
+        radiusEnabledButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
+            PacketHandler.AdminStatusPayload status = AdminStatusClientState.getLastStatus();
+            if (status != null) {
+                AdminStatusClientState.setDraftRadiusEnabled(!status.radiusSyncEnabled());
+            }
+            updateDynamicButtons();
+        }).bounds(x, settingsY, 94, 20).build());
+        radiusModeButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
+            adminRadiusMode = switch (adminRadiusMode) {
+                case "PLAYER_POSITION" -> "WORLD_SPAWN";
+                case "WORLD_SPAWN" -> "FIXED";
+                default -> "PLAYER_POSITION";
+            };
+            AdminStatusClientState.setDraftRadiusMode(adminRadiusMode);
+            updateDynamicButtons();
+        }).bounds(x + 102, settingsY, 132, 20).build());
+        addRenderableWidget(Button.builder(Component.literal("-"), b -> {
+            adminRadiusMaxBlocks = Math.max(128, adminRadiusMaxBlocks - 128);
+            AdminStatusClientState.setDraftMaxRadius(adminRadiusMaxBlocks);
+            updateDynamicButtons();
+        }).bounds(x + 242, settingsY, 28, 20).build());
+        radiusMaxValueButton = addRenderableWidget(Button.builder(Component.empty(), b -> {
+        }).bounds(x + 274, settingsY, 74, 20).build());
+        radiusMaxValueButton.active = false;
+        addRenderableWidget(Button.builder(Component.literal("+"), b -> {
+            adminRadiusMaxBlocks = Math.min(100_000, adminRadiusMaxBlocks + 128);
+            AdminStatusClientState.setDraftMaxRadius(adminRadiusMaxBlocks);
+            updateDynamicButtons();
+        }).bounds(x + 352, settingsY, 28, 20).build());
+        radiusSaveButton = addRenderableWidget(Button.builder(
+                Component.translatable("mapsyncer.gui.admin.save_radius"),
+                b -> AdminStatusClientState.sendSettingsUpdate()
+        ).bounds(x + 388, settingsY, Math.max(96, contentWidth - 388), 20).build());
 
         AdminStatusClientState.requestNow();
         lastAdminPoll = System.currentTimeMillis();
@@ -360,6 +426,10 @@ public class MapSyncerScreen extends Screen {
                 : status.syncSpeedLimitKBps() + " KB/s";
         graphics.text(font, Component.translatable("mapsyncer.gui.admin.limit", speedLimit), x, statusY + 48, 0xFFB9C3CC, false);
         graphics.text(font, Component.translatable("mapsyncer.gui.admin.incremental_status", status.incrementalStatus()), x, statusY + 64, 0xFFB9C3CC, false);
+        graphics.text(font, Component.translatable("mapsyncer.gui.admin.radius_status",
+                status.radiusSyncEnabled() ? Component.translatable("mapsyncer.gui.settings.on").getString()
+                        : Component.translatable("mapsyncer.gui.settings.off").getString(),
+                status.maxRadiusSyncBlocks(), status.radiusSyncCenterMode()), x, statusY + 80, 0xFFB9C3CC, false);
     }
 
     private void drawSettingsTab(GuiGraphicsExtractor graphics) {
@@ -404,6 +474,9 @@ public class MapSyncerScreen extends Screen {
         if (syncAllButton != null) {
             syncAllButton.active = canSync;
         }
+        if (radiusSyncButton != null) {
+            radiusSyncButton.active = canSync && ClientPlayNetworking.canSend(PacketHandler.RadiusSyncRequestPayload.TYPE);
+        }
         if (voxyButton != null) {
             if (MapPacketReceiver.isServerInstalled()) {
                 VoxySyncClient.requestCapability();
@@ -416,6 +489,9 @@ public class MapSyncerScreen extends Screen {
         }
         if (forceButton != null) {
             forceButton.active = canAdminAction && dimensionBox != null && !sanitizeDimensionInput(dimensionBox.getValue()).isBlank();
+        }
+        if (radiusSaveButton != null) {
+            radiusSaveButton.active = canAdminAction && ClientPlayNetworking.canSend(PacketHandler.AdminSettingsUpdatePayload.TYPE);
         }
         updateSettingsButtonMessages();
     }
@@ -434,6 +510,27 @@ public class MapSyncerScreen extends Screen {
         if (chatIntervalValueButton != null) {
             chatIntervalValueButton.setMessage(Component.translatable("mapsyncer.gui.settings.percent",
                     ClientConfig.VALUES.syncProgressChatIntervalPercent));
+        }
+        if (radiusValueButton != null) {
+            radiusValueButton.setMessage(Component.translatable("mapsyncer.gui.sync.radius_value", radiusSyncBlocks));
+        }
+        PacketHandler.AdminStatusPayload status = AdminStatusClientState.getLastStatus();
+        if (status != null && !AdminStatusClientState.hasDraft()) {
+            adminRadiusMaxBlocks = status.maxRadiusSyncBlocks();
+            adminRadiusMode = status.radiusSyncCenterMode();
+        } else {
+            adminRadiusMaxBlocks = AdminStatusClientState.getDraftMaxRadius(adminRadiusMaxBlocks);
+            adminRadiusMode = AdminStatusClientState.getDraftRadiusMode(adminRadiusMode);
+        }
+        if (radiusEnabledButton != null) {
+            boolean enabled = AdminStatusClientState.getDraftRadiusEnabled(status != null && status.radiusSyncEnabled());
+            radiusEnabledButton.setMessage(toggleLabel(enabled));
+        }
+        if (radiusModeButton != null) {
+            radiusModeButton.setMessage(Component.translatable("mapsyncer.gui.admin.radius_mode." + adminRadiusMode));
+        }
+        if (radiusMaxValueButton != null) {
+            radiusMaxValueButton.setMessage(Component.literal(String.valueOf(adminRadiusMaxBlocks)));
         }
     }
 
@@ -536,7 +633,7 @@ public class MapSyncerScreen extends Screen {
     }
 
     private int syncBarY() {
-        return syncButtonY() + (panelHeight() < 270 ? 54 : 60);
+        return syncButtonY() + (panelHeight() < 270 ? 82 : 88);
     }
 
     private int syncVoxyY() {

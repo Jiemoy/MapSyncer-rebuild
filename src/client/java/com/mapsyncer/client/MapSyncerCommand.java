@@ -3,6 +3,7 @@ package com.mapsyncer.client;
 import com.mojang.brigadier.Command;
 import com.mojang.brigadier.CommandDispatcher;
 import com.mojang.brigadier.arguments.StringArgumentType;
+import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.suggestion.Suggestions;
 import com.mojang.brigadier.suggestion.SuggestionsBuilder;
@@ -70,6 +71,9 @@ public class MapSyncerCommand {
                                 .executes(MapSyncerCommand::showHelp))
                         .then(literal("sync")
                                 .executes(MapSyncerCommand::executeSyncCurrentDim)
+                                .then(literal("radius")
+                                        .then(argument("blocks", IntegerArgumentType.integer(1))
+                                                .executes(MapSyncerCommand::executeSyncRadius)))
                                 .then(literal("all")
                                         .executes(MapSyncerCommand::executeSyncAll))
                                 .then(argument("dimension", StringArgumentType.greedyString())
@@ -106,6 +110,7 @@ public class MapSyncerCommand {
         // 客户端同步命令
         mc.player.sendSystemMessage(ChatUtils.prefix().append(ChatUtils.header("mapsyncer.command.help_header")));
         mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_sync"));
+        mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_sync_radius"));
         mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_sync_dim"));
         mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_sync_all"));
         mc.player.sendSystemMessage(ChatUtils.desc("mapsyncer.command.help_gui"));
@@ -307,6 +312,12 @@ public class MapSyncerCommand {
         return currentDim.identifier().toString();
     }
 
+    private static int executeSyncRadius(CommandContext<FabricClientCommandSource> context) {
+        int radiusBlocks = IntegerArgumentType.getInteger(context, "blocks");
+        sendRadiusSyncRequest(Minecraft.getInstance(), radiusBlocks);
+        return Command.SINGLE_SUCCESS;
+    }
+
     static String resolveDimensionId(String input, ClientLevel level) {
         switch (input.toLowerCase()) {
             case "overworld": return "minecraft:overworld";
@@ -360,6 +371,37 @@ public class MapSyncerCommand {
                 }))
                 .exceptionally(error -> {
                     LOGGER.error("Failed to prepare sync request", error);
+                    return null;
+                });
+    }
+
+    static void sendRadiusSyncRequest(Minecraft mc, int radiusBlocks) {
+        if (mc.player == null || mc.level == null) {
+            return;
+        }
+        if (!ClientPlayNetworking.canSend(PacketHandler.RadiusSyncRequestPayload.TYPE)) {
+            mc.player.sendSystemMessage(ChatUtils.error("mapsyncer.sync.radius_unsupported"));
+            return;
+        }
+
+        Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
+        String dimensionId = currentDimensionId(mc);
+        String xaeroDim = DimensionPathMapping.getInstance().toXaeroDimension(dimensionId);
+        int playerX = mc.player.getBlockX();
+        int playerY = mc.player.getBlockY();
+        int playerZ = mc.player.getBlockZ();
+
+        CompletableFuture.supplyAsync(() -> prepareSyncRequest(serverDir, dimensionId, xaeroDim, false))
+                .thenAccept(prepared -> mc.execute(() -> {
+                    if (mc.player == null) {
+                        return;
+                    }
+                    ClientPlayNetworking.send(new PacketHandler.RadiusSyncRequestPayload(
+                            prepared.metaMap(), dimensionId, radiusBlocks, playerX, playerY, playerZ));
+                    SyncProgressTracker.startTracking();
+                }))
+                .exceptionally(error -> {
+                    LOGGER.error("Failed to prepare radius sync request", error);
                     return null;
                 });
     }

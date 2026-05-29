@@ -48,9 +48,12 @@
 
 ```text
 /mapsyncer sync                            # 同步当前所在维度
+/mapsyncer sync radius 1000                # 同步当前维度内指定半径附近的地图
 /mapsyncer sync all                        # 同步所有已生成缓存的维度
 /mapsyncer sync <dimension>                # 同步指定维度，例如 overworld 或 minecraft:the_nether
 ```
+
+GUI 的“同步”页也提供半径同步按钮，适合大型服务器只下载出生点或当前活动区域附近的地图。
 
 管理员命令：
 
@@ -107,6 +110,10 @@ config/mapsyncer-client.json
 - `maxSyncPacketSize`：同步分包大小
 - `syncSpeedLimitKBps`：同步限速；客户端同步时卡顿可优先降低这个值
 - `enableDirtyRegionTracking`：是否启用 DirtyRegion 精准增量，默认 `true`
+- `enableRadiusSync`：是否允许半径同步，默认 `true`
+- `maxRadiusSyncBlocks`：玩家可请求的最大半径，默认 `3000`
+- `radiusSyncCenterMode`：半径同步中心，可为 `PLAYER_POSITION`、`WORLD_SPAWN`、`FIXED`
+- `radiusSyncFixedDimension` / `radiusSyncFixedX/Y/Z`：固定中心模式使用的维度与坐标
 
 同步性能：
 
@@ -118,3 +125,21 @@ config/mapsyncer-client.json
 ```text
 server_map_cache/
 ```
+
+## 公共路标
+
+公共路标由服务端配置文件维护：
+
+```text
+config/mapsyncer-public-waypoints.json
+```
+
+默认会生成示例配置但不启用。启用后，服务端会在玩家进服或开始地图同步时下发公共路标。客户端会尝试写入 Xaero 的 `waypoints.txt` 文本文件，写入格式为：
+
+```text
+waypoint:name:initial:x:y:z:color:disabled:type:set:dimension
+```
+
+MapSyncer 只管理配置中的公共组（默认 `ServerPublic`）：写入前会读取现有 `waypoints.txt`，删除该组旧行，再追加服务端下发的新行。玩家私人路标和其他组不会被修改。
+
+公共路标依赖客户端存在可识别的 Xaero 路标目录，推荐同时安装/启用 Xaero Minimap 或 Xaero Waypoints。若客户端没有对应路标目录，MapSyncer 会跳过公共路标同步，普通地图同步不受影响。

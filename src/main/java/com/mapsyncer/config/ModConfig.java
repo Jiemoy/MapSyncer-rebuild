@@ -63,6 +63,18 @@ public class ModConfig {
                         SERVER.incrementalForceSaveBeforeScan = true;
                         needsSave = true;
                     }
+                    if (!root.has("enableRadiusSync")) {
+                        SERVER.enableRadiusSync = true;
+                        needsSave = true;
+                    }
+                    if (!root.has("maxRadiusSyncBlocks")) {
+                        SERVER.maxRadiusSyncBlocks = 3000;
+                        needsSave = true;
+                    }
+                    if (!root.has("radiusSyncCenterMode")) {
+                        SERVER.radiusSyncCenterMode = RadiusSyncCenterMode.PLAYER_POSITION;
+                        needsSave = true;
+                    }
                 }
                 if (needsSave) {
                     save();
@@ -105,6 +117,12 @@ public class ModConfig {
     public enum ScanMode {
         SURFACE,
         CAVE
+    }
+
+    public enum RadiusSyncCenterMode {
+        PLAYER_POSITION,
+        WORLD_SPAWN,
+        FIXED
     }
 
     /**
@@ -167,6 +185,15 @@ public class ModConfig {
         public int maxDirtyRegionsPerIncrementalRun = 512;
         public boolean incrementalForceSaveBeforeScan = true;
 
+        // Radius sync settings
+        public boolean enableRadiusSync = true;
+        public int maxRadiusSyncBlocks = 3000;
+        public RadiusSyncCenterMode radiusSyncCenterMode = RadiusSyncCenterMode.PLAYER_POSITION;
+        public String radiusSyncFixedDimension = "minecraft:overworld";
+        public int radiusSyncFixedX = 0;
+        public int radiusSyncFixedY = 64;
+        public int radiusSyncFixedZ = 0;
+
         // Dimension scan settings
         public ScanMode defaultScanMode = ScanMode.SURFACE;
         public int defaultCaveStart = 63;
@@ -196,6 +223,15 @@ public class ModConfig {
             this.maxDirtyRegionsPerIncrementalRun = other.maxDirtyRegionsPerIncrementalRun > 0
                     ? other.maxDirtyRegionsPerIncrementalRun : 512;
             this.incrementalForceSaveBeforeScan = other.incrementalForceSaveBeforeScan;
+            this.enableRadiusSync = other.enableRadiusSync;
+            this.maxRadiusSyncBlocks = other.maxRadiusSyncBlocks > 0 ? other.maxRadiusSyncBlocks : 3000;
+            this.radiusSyncCenterMode = other.radiusSyncCenterMode != null
+                    ? other.radiusSyncCenterMode : RadiusSyncCenterMode.PLAYER_POSITION;
+            this.radiusSyncFixedDimension = other.radiusSyncFixedDimension != null && !other.radiusSyncFixedDimension.isBlank()
+                    ? other.radiusSyncFixedDimension : "minecraft:overworld";
+            this.radiusSyncFixedX = other.radiusSyncFixedX;
+            this.radiusSyncFixedY = other.radiusSyncFixedY;
+            this.radiusSyncFixedZ = other.radiusSyncFixedZ;
             this.defaultScanMode = other.defaultScanMode != null ? other.defaultScanMode : ScanMode.SURFACE;
             this.defaultCaveStart = other.defaultCaveStart;
             this.dimensionConfigs = other.dimensionConfigs != null && !other.dimensionConfigs.isEmpty()

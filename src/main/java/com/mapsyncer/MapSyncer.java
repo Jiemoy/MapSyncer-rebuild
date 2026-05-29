@@ -7,6 +7,7 @@ import com.mapsyncer.server.DimensionRegistry;
 import com.mapsyncer.server.DirtyRegionTracker;
 import com.mapsyncer.server.IncrementalUpdateHandler;
 import com.mapsyncer.server.PlayerJoinHandler;
+import com.mapsyncer.server.PublicWaypointConfig;
 import com.mapsyncer.server.ServerSyncHandler;
 import com.mapsyncer.server.VoxySyncHandler;
 import net.fabricmc.api.ModInitializer;
@@ -31,6 +32,7 @@ public class MapSyncer implements ModInitializer {
                 .orElse("unknown");
 
         ModConfig.load();
+        PublicWaypointConfig.load();
         ServerSyncHandler.register();
         VoxySyncHandler.register();
         VoxySyncHandler.logSecurityWarningIfEnabled();
