@@ -41,6 +41,8 @@ import java.util.Set;
 public class XaeroMapIntegrator {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(XaeroMapIntegrator.class);
+    public static final String DEFAULT_WORLD_ID = "default";
+    public static final String DEFAULT_MW_DIR_NAME = "mw$" + DEFAULT_WORLD_ID;
 
     /** 同步期间更新的区域集合，用于选择性重置 */
     private static volatile Set<RegionCoord> updatedRegions = new HashSet<>();
@@ -740,9 +742,10 @@ public class XaeroMapIntegrator {
             return null;
         }
 
-        String xaeroDim = chunk.dimension;
-        Path dimDir = serverDir.resolve(xaeroDim);
-        Path mwDir = dimDir.resolve("mw$" + worldId);
+        Path mwDir = getDefaultMwDir(serverDir, chunk.dimension);
+        if (mwDir == null) {
+            return null;
+        }
         Path targetDir = chunk.caveLayer == Integer.MAX_VALUE
                 ? mwDir
                 : mwDir.resolve("caves").resolve(String.valueOf(chunk.caveLayer));
@@ -750,31 +753,21 @@ public class XaeroMapIntegrator {
         return new RegionFileTarget(mwDir, targetDir, outputFile);
     }
 
+    public static Path getDefaultMwDir(Path serverDir, String xaeroDim) {
+        if (serverDir == null || xaeroDim == null || xaeroDim.isBlank()) {
+            return null;
+        }
+        return serverDir.resolve(xaeroDim).resolve(DEFAULT_MW_DIR_NAME);
+    }
+
     private static Path writeChunkDataAndGetDir(ChunkMapData chunk, Path serverDir, int worldId) {
         RegionFileTarget resolvedTarget = resolveRegionFileTarget(chunk, serverDir, worldId);
         if (resolvedTarget == null) {
             return null;
         }
-        // chunk.dimension 已经是 Xaero 格式，直接使用
-        // 注意：服务端发送的 dimension 就是 Xaero 格式（如 null, DIM-1, DIM1, twilightforest$twilight_forest）
-        String xaeroDim = chunk.dimension;
-        Path dimDir = serverDir.resolve(xaeroDim);
-        Path mwDir = dimDir.resolve("mw$" + worldId);
-
-        // 根据 caveLayer 决定最终目录
-        Path targetDir;
-        if (chunk.caveLayer == Integer.MAX_VALUE) {
-            // 地表层：直接在 mw$<worldId> 目录
-            targetDir = mwDir;
-        } else {
-            // 洞穴层：存放到 caves/<layer> 子目录
-            targetDir = mwDir.resolve("caves").resolve(String.valueOf(chunk.caveLayer));
-        }
-
-        Path outputFile = targetDir.resolve(chunk.regionX + "_" + chunk.regionZ + ".zip");
-        targetDir = resolvedTarget.targetDir();
-        outputFile = resolvedTarget.outputFile();
-        mwDir = resolvedTarget.mwDir();
+        Path mwDir = resolvedTarget.mwDir();
+        Path targetDir = resolvedTarget.targetDir();
+        Path outputFile = resolvedTarget.outputFile();
         Path tempFile = targetDir.resolve(chunk.regionX + "_" + chunk.regionZ + ".zip.temp");
 
         try {

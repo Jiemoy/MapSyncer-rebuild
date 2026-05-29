@@ -1,5 +1,13 @@
 # MapSyncer for Xaero World Map
 
+## Xaero default map and migration
+
+MapSyncer writes normal Xaero World Map sync data to `mw$default` instead of creating a second `mw$map` map from the server `worldId`. Players should keep using Xaero's default map for the whole server.
+
+If an older client already has `mw$map` or another legacy `mw$*` folder, MapSyncer starts a background migration before the next map write. It copies only missing `.zip` region files into the matching dimension under `mw$default`, keeps existing default files, preserves `caves/<layer>`, and ignores `.part`, `.temp`, and non-zip files.
+
+The migration runs on a client background thread and then uses the existing batched Xaero reload queue, so players do not need to relog after the merge. It never reads, writes, deletes, or overwrites `waypoints.txt`; private waypoints remain untouched. Old `mw$map` folders are kept for safety, and players can manually delete them under `xaero/world-map/.../` after confirming the merged default map looks correct.
+
 把服务端已探索区域生成成 Xaero's World Map 可读取的缓存，并让客户端按需同步。
 
 ## 版本

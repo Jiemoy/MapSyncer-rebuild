@@ -470,9 +470,13 @@ public class MapSyncerCommand {
      */
     private static Path findMwDir(Path dimDir) {
         if (dimDir == null || !dimDir.toFile().exists()) return null;
+        Path defaultMwDir = dimDir.resolve(XaeroMapIntegrator.DEFAULT_MW_DIR_NAME);
+        if (Files.isDirectory(defaultMwDir)) {
+            return defaultMwDir;
+        }
         try {
             return Files.list(dimDir)
-                    .filter(p -> p.getFileName().toString().startsWith("mw$"))
+                    .filter(p -> XaeroMapIntegrator.DEFAULT_MW_DIR_NAME.equals(p.getFileName().toString()))
                     .findFirst()
                     .orElse(null);
         } catch (IOException e) {

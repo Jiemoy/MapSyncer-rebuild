@@ -93,6 +93,7 @@ public class ClientHashManager {
         java.util.List<Path> zipFiles;
         try (Stream<Path> walk = Files.walk(mapDir)) {
             zipFiles = walk.filter(p -> p.toString().endsWith(".zip"))
+                    .filter(p -> isDefaultMapZip(mapDir, serverDir, p))
                     .toList();
         } catch (IOException e) {
             LOGGER.error("Failed to walk map directory", e);
@@ -197,6 +198,17 @@ public class ClientHashManager {
      */
     private static String computeFileHash(Path filePath) {
         return HashUtils.computeFileHash(filePath);
+    }
+
+    private static boolean isDefaultMapZip(Path mapDir, Path serverDir, Path zipPath) {
+        String mapDirName = mapDir.getFileName() != null ? mapDir.getFileName().toString() : "";
+        if (XaeroMapIntegrator.DEFAULT_MW_DIR_NAME.equals(mapDirName)) {
+            return true;
+        }
+
+        String relative = serverDir.relativize(zipPath).toString().replace("\\", "/");
+        String[] parts = relative.split("/");
+        return parts.length >= 3 && XaeroMapIntegrator.DEFAULT_MW_DIR_NAME.equals(parts[1]);
     }
 
     /**

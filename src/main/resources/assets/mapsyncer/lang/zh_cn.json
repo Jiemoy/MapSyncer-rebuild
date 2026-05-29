@@ -174,5 +174,10 @@
   "mapsyncer.gui.voxy.reason.client_io_failed": "客户端写入临时文件失败",
   "mapsyncer.gui.voxy.reason.import_busy": "Voxy 正在导入其他数据",
   "mapsyncer.gui.voxy.reason.import_failed": "Voxy 导入启动失败",
-  "mapsyncer.gui.voxy.reason.sending": "服务端正在发送数据"
+  "mapsyncer.gui.voxy.reason.sending": "服务端正在发送数据",
+  "mapsyncer.migration.start": "正在后台把旧 Xaero 地图目录合并到 mw$default，可能需要一些时间，请不要强制关闭游戏。",
+  "mapsyncer.migration.complete": "地图数据合并完成：复制 %d 个，已存在 %d 个，失败 %d 个。旧 mw$map 文件夹已保留；确认地图无误后，可前往 xaero/world-map 目录手动删除旧文件夹以节省磁盘空间。",
+  "mapsyncer.migration.failed": "旧地图数据合并失败：%s",
+  "mapsyncer.migration.skipped": "没有需要合并的旧 Xaero 地图目录",
+  "mapsyncer.migration.reload": "正在刷新 %d 个已合并地图区域"
 }

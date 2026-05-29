@@ -89,6 +89,7 @@ public class MapPacketReceiver {
 
     /** 等待在客户端主线程触发 Xaero 刷新的 region 队列。 */
     private static final ConcurrentLinkedQueue<PendingRegionLoad> pendingRegionLoads = new ConcurrentLinkedQueue<>();
+    private static final ConcurrentLinkedQueue<PendingRegionLoad> externalRegionLoads = new ConcurrentLinkedQueue<>();
 
     /** 用于丢弃断线、取消或新同步开始后遗留的旧同步任务。 */
     private static final AtomicLong syncGeneration = new AtomicLong();
@@ -143,6 +144,7 @@ public class MapPacketReceiver {
         completionPending = false;
         completionRegionCount = 0;
         pendingRegionLoads.clear();
+        externalRegionLoads.clear();
         loadedRegions.clear();
         lastRegionReloadFlushMillis = 0;
         Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
@@ -217,6 +219,7 @@ public class MapPacketReceiver {
             LOGGER.debug("Received sync response: status={}, chunks={}, isComplete={}", status, chunks.size(), payload.isComplete());
 
             Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
+            DefaultMapMigration.schedule(serverDir);
 
             // 根据状态决定处理方式
             if ("no_cache".equals(status) || "dim_not_available".equals(status)) {
@@ -314,6 +317,7 @@ public class MapPacketReceiver {
     public static void handleSyncRegionPart(PacketHandler.SyncRegionPartPayload payload,
             ClientPlayNetworking.Context context) {
         Path serverDir = XaeroMapIntegrator.getCurrentServerDirectory();
+        DefaultMapMigration.schedule(serverDir);
         boolean isCaveDimension = context.client().level != null && context.client().level.dimension() == Level.NETHER;
         String currentXaeroDim = context.client().level != null
                 ? DimensionPathMapping.getInstance().toXaeroDimension(context.client().level.dimension().identifier().toString())
@@ -629,9 +633,53 @@ public class MapPacketReceiver {
         });
     }
 
+    public static void queueExternalRegionReloads(Set<XaeroMapIntegrator.RegionCoord> regions) {
+        if (regions == null || regions.isEmpty()) {
+            return;
+        }
+        long generation = syncGeneration.get();
+        for (XaeroMapIntegrator.RegionCoord coord : regions) {
+            if (coord != null) {
+                externalRegionLoads.offer(new PendingRegionLoad(coord, coord.caveLayer(), true, generation));
+            }
+        }
+        lastRegionReloadFlushMillis = 0;
+    }
+
+    private static void flushExternalRegionLoads() {
+        long generation = syncGeneration.get();
+        if (!externalRegionLoads.isEmpty() && !reflectionInitialized) {
+            initializeReflectionCache();
+        }
+        if (externalRegionLoads.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (externalRegionLoads.size() < REGION_RELOAD_BATCH_SIZE
+                && now - lastRegionReloadFlushMillis < REGION_RELOAD_BATCH_DELAY_MS) {
+            return;
+        }
+        int processed = 0;
+        while (processed < REGION_RELOAD_BATCH_SIZE) {
+            PendingRegionLoad pending = externalRegionLoads.poll();
+            if (pending == null) {
+                break;
+            }
+            if (pending.generation() != generation) {
+                continue;
+            }
+            triggerSingleRegionLoad(pending.coord(), pending.caveLayer(), pending.inViewDistance());
+            processed++;
+        }
+        if (processed > 0) {
+            lastRegionReloadFlushMillis = System.currentTimeMillis();
+        }
+    }
+
     public static void onClientTick(Minecraft client) {
         long generation = syncGeneration.get();
         if (pendingRegionLoads.isEmpty()) {
+            flushExternalRegionLoads();
             tryCompleteSyncOnClient(generation);
             return;
         }
@@ -662,6 +710,7 @@ public class MapPacketReceiver {
             lastRegionReloadFlushMillis = now;
         }
 
+        flushExternalRegionLoads();
         tryCompleteSyncOnClient(generation);
     }
 

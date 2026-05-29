@@ -174,5 +174,10 @@
     "mapsyncer.gui.voxy.reason.client_io_failed":  "Client failed to write temporary files",
     "mapsyncer.gui.voxy.reason.import_busy":  "Voxy is importing other data",
     "mapsyncer.gui.voxy.reason.import_failed":  "Failed to start Voxy import",
-    "mapsyncer.gui.voxy.reason.sending":  "Server is sending data"
+    "mapsyncer.gui.voxy.reason.sending":  "Server is sending data",
+    "mapsyncer.migration.start":  "Merging legacy Xaero map folders into mw$default in the background. This can take a while; please do not force close the game.",
+    "mapsyncer.migration.complete":  "Map data merged: %d copied, %d already existed, %d failed. Old mw$map folders were kept; after checking the map, you may manually delete them under xaero/world-map to save disk space.",
+    "mapsyncer.migration.failed":  "Failed to merge legacy map data: %s",
+    "mapsyncer.migration.skipped":  "No legacy Xaero map folder needs merging",
+    "mapsyncer.migration.reload":  "Refreshing %d merged map regions"
 }
