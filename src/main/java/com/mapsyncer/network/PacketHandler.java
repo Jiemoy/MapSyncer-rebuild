@@ -53,6 +53,10 @@ public class PacketHandler {
             MapSyncer.MOD_ID, "public_waypoints");
     public static final Identifier PUBLIC_WAYPOINTS_REQUEST_ID = Identifier.fromNamespaceAndPath(
             MapSyncer.MOD_ID, "public_waypoints_request");
+    public static final Identifier PUBLIC_WAYPOINT_ADD_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "public_waypoint_add");
+    public static final Identifier PUBLIC_WAYPOINT_ADD_RESULT_ID = Identifier.fromNamespaceAndPath(
+            MapSyncer.MOD_ID, "public_waypoint_add_result");
 
     /** 服务端已安装通知包的资源定位符 */
     public static final Identifier SERVER_INSTALLED_ID = Identifier.fromNamespaceAndPath(
@@ -734,6 +738,50 @@ public class PacketHandler {
 
         public static PublicWaypointsRequestPayload decode(RegistryFriendlyByteBuf buf) {
             return new PublicWaypointsRequestPayload();
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record PublicWaypointAddPayload(PublicWaypoint waypoint) implements CustomPacketPayload {
+        public static final Type<PublicWaypointAddPayload> TYPE = new Type<>(PUBLIC_WAYPOINT_ADD_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, PublicWaypointAddPayload> STREAM_CODEC = StreamCodec.of(
+                PublicWaypointAddPayload::encode, PublicWaypointAddPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, PublicWaypointAddPayload payload) {
+            PublicWaypoint.encode(buf, payload.waypoint);
+        }
+
+        public static PublicWaypointAddPayload decode(RegistryFriendlyByteBuf buf) {
+            return new PublicWaypointAddPayload(PublicWaypoint.decode(buf));
+        }
+
+        @Override
+        public Type<? extends CustomPacketPayload> type() {
+            return TYPE;
+        }
+    }
+
+    public record PublicWaypointAddResultPayload(String status, String name) implements CustomPacketPayload {
+        public static final Type<PublicWaypointAddResultPayload> TYPE = new Type<>(PUBLIC_WAYPOINT_ADD_RESULT_ID);
+        public static final StreamCodec<RegistryFriendlyByteBuf, PublicWaypointAddResultPayload> STREAM_CODEC = StreamCodec.of(
+                PublicWaypointAddResultPayload::encode, PublicWaypointAddResultPayload::decode
+        );
+
+        public static void encode(RegistryFriendlyByteBuf buf, PublicWaypointAddResultPayload payload) {
+            buf.writeUtf(payload.status);
+            buf.writeUtf(payload.name);
+        }
+
+        public static PublicWaypointAddResultPayload decode(RegistryFriendlyByteBuf buf) {
+            return new PublicWaypointAddResultPayload(
+                    buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH),
+                    buf.readUtf(MAX_WAYPOINT_FIELD_LENGTH)
+            );
         }
 
         @Override

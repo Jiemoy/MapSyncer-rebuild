@@ -46,12 +46,18 @@ public final class PublicWaypointConfig {
         }
     }
 
-    private static void save() {
+    private static boolean save() {
+        return save(config);
+    }
+
+    private static boolean save(Config configToSave) {
         try {
             Files.createDirectories(CONFIG_PATH.getParent());
-            Files.writeString(CONFIG_PATH, GSON.toJson(config));
+            Files.writeString(CONFIG_PATH, GSON.toJson(configToSave));
+            return true;
         } catch (IOException e) {
             MapSyncer.LOGGER.error("Failed to save public waypoint config", e);
+            return false;
         }
     }
 
@@ -61,6 +67,59 @@ public final class PublicWaypointConfig {
 
     public static Summary summary() {
         return cachedSummary;
+    }
+
+    public static synchronized AddResult addOrUpdateFromClient(PacketHandler.PublicWaypoint waypoint) {
+        if (waypoint == null) {
+            return AddResult.FAILED;
+        }
+
+        Config current = sanitize(copyConfig(config));
+        String name = cleanField(waypoint.name(), "Waypoint");
+        String initial = cleanField(waypoint.initial(), name.substring(0, Math.min(1, name.length())));
+        String dimension = cleanField(waypoint.dimension(), "minecraft:overworld");
+        String type = cleanField(waypoint.type(), "0");
+
+        Waypoint incoming = new Waypoint();
+        incoming.enabled = true;
+        incoming.name = name;
+        incoming.initial = initial;
+        incoming.dimension = dimension;
+        incoming.x = waypoint.x();
+        incoming.y = waypoint.y();
+        incoming.z = waypoint.z();
+        incoming.color = waypoint.color();
+        incoming.disabled = waypoint.disabled();
+        incoming.type = type;
+
+        boolean updated = false;
+        for (int i = 0; i < current.waypoints.size(); i++) {
+            Waypoint existing = current.waypoints.get(i);
+            if (existing == null) {
+                continue;
+            }
+            String existingDimension = cleanField(existing.dimension, "minecraft:overworld");
+            boolean sameDimension = existingDimension.equals(dimension);
+            boolean sameName = cleanField(existing.name, "Waypoint").equalsIgnoreCase(name);
+            boolean samePosition = existing.x == incoming.x && existing.y == incoming.y && existing.z == incoming.z;
+            if (sameDimension && (sameName || samePosition)) {
+                current.waypoints.set(i, incoming);
+                updated = true;
+                break;
+            }
+        }
+
+        if (!updated) {
+            current.waypoints.add(incoming);
+        }
+
+        current.enabled = true;
+        if (!save(current)) {
+            return AddResult.FAILED;
+        }
+        config = current;
+        rebuildCache();
+        return updated ? AddResult.UPDATED : AddResult.ADDED;
     }
 
     private static void rebuildCache() {
@@ -141,6 +200,39 @@ public final class PublicWaypointConfig {
         return cfg;
     }
 
+    private static Config copyConfig(Config source) {
+        Config copy = new Config();
+        Config safeSource = source == null ? defaultConfig() : source;
+        copy.enabled = safeSource.enabled;
+        copy.groupName = safeSource.groupName;
+        copy.replaceGroup = safeSource.replaceGroup;
+        copy.waypoints = new ArrayList<>();
+        if (safeSource.waypoints != null) {
+            for (Waypoint waypoint : safeSource.waypoints) {
+                copy.waypoints.add(copyWaypoint(waypoint));
+            }
+        }
+        return copy;
+    }
+
+    private static Waypoint copyWaypoint(Waypoint source) {
+        if (source == null) {
+            return null;
+        }
+        Waypoint copy = new Waypoint();
+        copy.enabled = source.enabled;
+        copy.name = source.name;
+        copy.initial = source.initial;
+        copy.dimension = source.dimension;
+        copy.x = source.x;
+        copy.y = source.y;
+        copy.z = source.z;
+        copy.color = source.color;
+        copy.disabled = source.disabled;
+        copy.type = source.type;
+        return copy;
+    }
+
     public static final class Config {
         public boolean enabled;
         public String groupName;
@@ -162,5 +254,11 @@ public final class PublicWaypointConfig {
     }
 
     public record Summary(boolean enabled, String groupName, int count, String hash) {
+    }
+
+    public enum AddResult {
+        ADDED,
+        UPDATED,
+        FAILED
     }
 }

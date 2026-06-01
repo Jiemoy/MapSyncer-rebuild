@@ -343,6 +343,12 @@ public class ServerSyncHandler {
         PayloadTypeRegistry.serverboundPlay().register(
                 PacketHandler.PublicWaypointsRequestPayload.TYPE,
                 PacketHandler.PublicWaypointsRequestPayload.STREAM_CODEC);
+        PayloadTypeRegistry.serverboundPlay().register(
+                PacketHandler.PublicWaypointAddPayload.TYPE,
+                PacketHandler.PublicWaypointAddPayload.STREAM_CODEC);
+        PayloadTypeRegistry.clientboundPlay().register(
+                PacketHandler.PublicWaypointAddResultPayload.TYPE,
+                PacketHandler.PublicWaypointAddResultPayload.STREAM_CODEC);
 
         ServerPlayNetworking.registerGlobalReceiver(PacketHandler.SyncRequestPayload.TYPE,
                 (payload, context) -> handleSyncRequest(payload, context));
@@ -354,6 +360,8 @@ public class ServerSyncHandler {
                 (payload, context) -> handleAdminSettingsUpdate(payload, context));
         ServerPlayNetworking.registerGlobalReceiver(PacketHandler.PublicWaypointsRequestPayload.TYPE,
                 (payload, context) -> sendPublicWaypoints(context.player()));
+        ServerPlayNetworking.registerGlobalReceiver(PacketHandler.PublicWaypointAddPayload.TYPE,
+                (payload, context) -> handlePublicWaypointAdd(payload, context));
     }
 
     private static void handleAdminStatusRequest(ServerPlayNetworking.Context context) {
@@ -384,6 +392,46 @@ public class ServerSyncHandler {
             ModConfig.SERVER.radiusSyncFixedZ = payload.radiusSyncFixedZ();
             ModConfig.save();
             sendAdminStatus(player);
+        });
+    }
+
+    private static void handlePublicWaypointAdd(PacketHandler.PublicWaypointAddPayload payload,
+                                                ServerPlayNetworking.Context context) {
+        ServerPlayer player = context.player();
+        player.level().getServer().execute(() -> {
+            if (!Commands.LEVEL_OWNERS.check(player.permissions())) {
+                ServerPlayNetworking.send(player,
+                        new PacketHandler.PublicWaypointAddResultPayload("permission_denied", ""));
+                player.sendSystemMessage(ChatUtils.error("mapsyncer.waypoints.import.permission_denied"));
+                sendAdminStatus(player);
+                return;
+            }
+
+            try {
+                PublicWaypointConfig.AddResult result = PublicWaypointConfig.addOrUpdateFromClient(payload.waypoint());
+                String name = payload.waypoint() == null ? "" : payload.waypoint().name();
+                if (result == PublicWaypointConfig.AddResult.FAILED) {
+                    ServerPlayNetworking.send(player,
+                            new PacketHandler.PublicWaypointAddResultPayload("failed", name));
+                    player.sendSystemMessage(ChatUtils.error("mapsyncer.waypoints.import.failed", name));
+                    sendAdminStatus(player);
+                    return;
+                }
+
+                String status = result == PublicWaypointConfig.AddResult.UPDATED ? "updated" : "added";
+                ServerPlayNetworking.send(player,
+                        new PacketHandler.PublicWaypointAddResultPayload(status, name));
+                player.sendSystemMessage(ChatUtils.success("mapsyncer.waypoints.import." + status, name));
+                sendAdminStatus(player);
+                sendPublicWaypoints(player);
+            } catch (Exception e) {
+                LOGGER.error("Failed to add public waypoint from {}", player.getUUID(), e);
+                String name = payload.waypoint() == null ? "" : payload.waypoint().name();
+                ServerPlayNetworking.send(player,
+                        new PacketHandler.PublicWaypointAddResultPayload("failed", name));
+                player.sendSystemMessage(ChatUtils.error("mapsyncer.waypoints.import.failed", name));
+                sendAdminStatus(player);
+            }
         });
     }
 

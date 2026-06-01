@@ -51,6 +51,9 @@ public class MapSyncerClient implements ClientModInitializer {
         ClientPlayNetworking.registerGlobalReceiver(PacketHandler.PublicWaypointsPayload.TYPE,
                 PublicWaypointReceiver::handle);
 
+        ClientPlayNetworking.registerGlobalReceiver(PacketHandler.PublicWaypointAddResultPayload.TYPE,
+                (payload, context) -> PublicWaypointImportClientState.handleAddResult(payload));
+
         ClientPlayNetworking.registerGlobalReceiver(PacketHandler.VoxyCapabilityPayload.TYPE,
                 VoxySyncClient::handleCapability);
 
@@ -74,6 +77,7 @@ public class MapSyncerClient implements ClientModInitializer {
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             AdminStatusClientState.reset();
             PublicWaypointClientState.reset();
+            PublicWaypointImportClientState.reset();
             VoxySyncClient.reset();
             ClientJoinHandler.onClientDisconnect(client);
         });

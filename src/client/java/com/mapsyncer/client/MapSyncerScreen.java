@@ -6,9 +6,13 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.AbstractWidget;
 import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.components.ContainerObjectSelectionList;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.components.Tooltip;
+import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.gui.narration.NarratableEntry;
 import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
@@ -16,10 +20,11 @@ import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Consumer;
 
 public class MapSyncerScreen extends Screen {
     private static final int PANEL_WIDTH = 600;
-    private static final int PANEL_HEIGHT = 326;
+    private static final int PANEL_HEIGHT = 450;
     private static final int COMPLETE_VISIBLE_MS = 2000;
     private static final int ADMIN_POLL_MS = 2000;
     private static final Duration TOOLTIP_DELAY = Duration.ofMillis(250);
@@ -52,11 +57,14 @@ public class MapSyncerScreen extends Screen {
     private Button radiusModeButton;
     private Button radiusMaxValueButton;
     private Button radiusSaveButton;
+    private Button scanLocalWaypointsButton;
+    private LocalWaypointList localWaypointList;
     private EditBox dimensionBox;
     private int radiusSyncBlocks = 1000;
     private int adminRadiusMaxBlocks = 3000;
     private String adminRadiusMode = "PLAYER_POSITION";
     private long lastAdminPoll;
+    private long lastWaypointListUpdate;
 
     public MapSyncerScreen() {
         super(Component.translatable("mapsyncer.gui.title"));
@@ -85,6 +93,7 @@ public class MapSyncerScreen extends Screen {
             }
         }
         updateDynamicButtons();
+        refreshLocalWaypointList(false);
     }
 
     @Override
@@ -334,6 +343,19 @@ public class MapSyncerScreen extends Screen {
         radiusSaveButton.setTooltip(tooltip("mapsyncer.gui.help.admin.save_radius"));
         radiusSaveButton.setTooltipDelay(TOOLTIP_DELAY);
 
+        int importY = adminImportY();
+        scanLocalWaypointsButton = addRenderableWidget(Button.builder(
+                Component.translatable("mapsyncer.gui.admin.waypoints.import.scan"),
+                b -> LocalXaeroWaypointScanner.scanAsync()
+        ).bounds(x, importY, Math.min(168, contentWidth), 20).build());
+        scanLocalWaypointsButton.setTooltip(tooltip("mapsyncer.gui.help.admin.waypoints_import_scan"));
+        scanLocalWaypointsButton.setTooltipDelay(TOOLTIP_DELAY);
+
+        localWaypointList = new LocalWaypointList(minecraft, x, adminWaypointListY(), contentWidth,
+                adminWaypointListHeight());
+        addRenderableWidget(localWaypointList);
+        refreshLocalWaypointList(true);
+
         AdminStatusClientState.requestNow();
         lastAdminPoll = System.currentTimeMillis();
     }
@@ -497,7 +519,13 @@ public class MapSyncerScreen extends Screen {
         graphics.textWithWordWrap(font, Component.translatable("mapsyncer.gui.admin.warning"), x + 8,
                 settingsY + 30, contentWidth() - 16, COLOR_WARN);
 
-        int statusY = y + (contentWidth() >= 470 ? 142 : 148);
+        int importY = adminImportY();
+        drawSection(graphics, x, importY - 18, contentWidth(), adminWaypointListHeight() + 54,
+                Component.translatable("mapsyncer.gui.section.waypoint_import"));
+        drawSingleLine(graphics, waypointImportStatusText(), x + 184, importY + 5,
+                Math.max(40, contentWidth() - 192), waypointImportStatusColor());
+
+        int statusY = adminStatusY();
         drawSection(graphics, x, statusY - 18, contentWidth(), panelTop() + panelHeight() - statusY - 8,
                 Component.translatable("mapsyncer.gui.section.server_status"));
         String error = AdminStatusClientState.getLastError();
@@ -541,6 +569,56 @@ public class MapSyncerScreen extends Screen {
                         : Component.translatable("mapsyncer.gui.settings.off").getString(),
                 status.publicWaypointsGroup(), status.publicWaypointsCount(), waypointHash),
                 x + 8, statusY + 62, contentWidth() - 16, COLOR_SUBTLE);
+    }
+
+    private void refreshLocalWaypointList(boolean force) {
+        if (localWaypointList == null) {
+            return;
+        }
+        long updatedAt = PublicWaypointImportClientState.getUpdatedAtMillis();
+        if (!force && updatedAt == lastWaypointListUpdate) {
+            return;
+        }
+        localWaypointList.setWaypoints(PublicWaypointImportClientState.getWaypoints());
+        lastWaypointListUpdate = updatedAt;
+    }
+
+    private Component waypointImportStatusText() {
+        PublicWaypointImportClientState.Status status = PublicWaypointImportClientState.getStatus();
+        return switch (status) {
+            case READY -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.ready",
+                    PublicWaypointImportClientState.getWaypoints().size(),
+                    PublicWaypointImportClientState.getSkippedCount());
+            case FAILED -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.failed",
+                    PublicWaypointImportClientState.getDetail());
+            case ADDING -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.adding",
+                    PublicWaypointImportClientState.getDetail());
+            case ADDED -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.added",
+                    PublicWaypointImportClientState.getDetail());
+            case UPDATED -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.updated",
+                    PublicWaypointImportClientState.getDetail());
+            default -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status."
+                    + status.name().toLowerCase());
+        };
+    }
+
+    private int waypointImportStatusColor() {
+        return switch (PublicWaypointImportClientState.getStatus()) {
+            case READY, ADDED, UPDATED -> COLOR_SUCCESS;
+            case NO_FILE, EMPTY, PERMISSION_DENIED -> COLOR_WARN;
+            case FAILED -> COLOR_ERROR;
+            default -> COLOR_SUBTLE;
+        };
+    }
+
+    private void submitLocalWaypoint(PacketHandler.PublicWaypoint waypoint) {
+        if (waypoint == null || !ClientPlayNetworking.canSend(PacketHandler.PublicWaypointAddPayload.TYPE)) {
+            PublicWaypointImportClientState.handleAddResult(
+                    new PacketHandler.PublicWaypointAddResultPayload("failed", waypoint == null ? "" : waypoint.name()));
+            return;
+        }
+        PublicWaypointImportClientState.setAdding(waypoint);
+        ClientPlayNetworking.send(new PacketHandler.PublicWaypointAddPayload(waypoint));
     }
 
     private void drawSettingsTab(GuiGraphicsExtractor graphics) {
@@ -628,11 +706,15 @@ public class MapSyncerScreen extends Screen {
                         Component.translatable("mapsyncer.gui.help.sync.extras_section")));
             }
             case ADMIN -> {
-                int statusY = panelTop() + 72 + (contentWidth() >= 470 ? 142 : 148);
+                int importY = adminImportY();
+                int statusY = adminStatusY();
                 frameHelpAreas.add(new HelpArea(contentLeft(), panelTop() + 64, contentWidth(), 90,
                         Component.translatable("mapsyncer.gui.help.admin.actions_section")));
                 frameHelpAreas.add(new HelpArea(contentLeft(), panelTop() + 94 + (contentWidth() >= 470 ? 68 : 92) - 18, contentWidth(), 44,
                         Component.translatable("mapsyncer.gui.help.admin.radius_section")));
+                frameHelpAreas.add(new HelpArea(contentLeft(), importY - 18, contentWidth(),
+                        adminWaypointListHeight() + 54,
+                        Component.translatable("mapsyncer.gui.help.admin.waypoints_import_section")));
                 frameHelpAreas.add(new HelpArea(contentLeft(), statusY - 18, contentWidth(),
                         panelTop() + panelHeight() - statusY - 8,
                         Component.translatable("mapsyncer.gui.help.admin.status_section")));
@@ -700,6 +782,10 @@ public class MapSyncerScreen extends Screen {
         }
         if (radiusSaveButton != null) {
             radiusSaveButton.active = canAdminAction && ClientPlayNetworking.canSend(PacketHandler.AdminSettingsUpdatePayload.TYPE);
+        }
+        if (scanLocalWaypointsButton != null) {
+            scanLocalWaypointsButton.active = canAdminAction
+                    && PublicWaypointImportClientState.getStatus() != PublicWaypointImportClientState.Status.SCANNING;
         }
         updateSettingsButtonMessages();
         updateHelpAreas();
@@ -847,6 +933,138 @@ public class MapSyncerScreen extends Screen {
 
     private int syncVoxyY() {
         return syncBarY() + (panelHeight() < 270 ? 34 : 32);
+    }
+
+    private int adminImportY() {
+        return panelTop() + 190;
+    }
+
+    private int adminWaypointListY() {
+        return adminImportY() + 26;
+    }
+
+    private int adminWaypointListHeight() {
+        return Math.max(72, Math.min(122, adminStatusY() - adminWaypointListY() - 24));
+    }
+
+    private int adminStatusY() {
+        return panelTop() + panelHeight() - 92;
+    }
+
+    private final class LocalWaypointList extends ContainerObjectSelectionList<LocalWaypointList.Entry> {
+        private List<LocalXaeroWaypointScanner.LocalWaypoint> currentWaypoints = List.of();
+
+        LocalWaypointList(Minecraft minecraft, int x, int y, int width, int height) {
+            super(minecraft, width, height, y, 28);
+            setX(x);
+        }
+
+        void setWaypoints(List<LocalXaeroWaypointScanner.LocalWaypoint> waypoints) {
+            List<LocalXaeroWaypointScanner.LocalWaypoint> safeWaypoints = List.copyOf(waypoints == null ? List.of() : waypoints);
+            if (safeWaypoints.equals(currentWaypoints)) {
+                return;
+            }
+            currentWaypoints = safeWaypoints;
+            replaceEntries(safeWaypoints.stream().map(Entry::new).toList());
+        }
+
+        @Override
+        public int getRowWidth() {
+            return Math.max(1, getWidth() - 18);
+        }
+
+        @Override
+        protected int scrollBarX() {
+            return getX() + getWidth() - 8;
+        }
+
+        @Override
+        protected void extractListBackground(GuiGraphicsExtractor graphics) {
+            graphics.fill(getX(), getY(), getX() + getWidth(), getY() + getHeight(), 0x66212A34);
+            graphics.outline(getX(), getY(), getWidth(), getHeight(), 0x55365260);
+        }
+
+        @Override
+        protected void extractListSeparators(GuiGraphicsExtractor graphics) {
+        }
+
+        @Override
+        public void extractWidgetRenderState(GuiGraphicsExtractor graphics, int mouseX, int mouseY, float partialTick) {
+            super.extractWidgetRenderState(graphics, mouseX, mouseY, partialTick);
+            if (currentWaypoints.isEmpty()) {
+                Component text = switch (PublicWaypointImportClientState.getStatus()) {
+                    case SCANNING -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.scanning");
+                    case NO_FILE -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.no_file");
+                    case EMPTY -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.empty");
+                    case FAILED -> Component.translatable("mapsyncer.gui.admin.waypoints.import.status.failed",
+                            PublicWaypointImportClientState.getDetail());
+                    default -> Component.translatable("mapsyncer.gui.admin.waypoints.import.empty_hint");
+                };
+                drawSingleLine(graphics, text, getX() + 8, getY() + 10, getWidth() - 16, COLOR_MUTED);
+            }
+        }
+
+        private final class Entry extends ContainerObjectSelectionList.Entry<Entry> {
+            private final LocalXaeroWaypointScanner.LocalWaypoint waypoint;
+            private final Button addButton;
+
+            Entry(LocalXaeroWaypointScanner.LocalWaypoint waypoint) {
+                this.waypoint = waypoint;
+                this.addButton = Button.builder(Component.translatable("mapsyncer.gui.admin.waypoints.import.add"),
+                        b -> submitLocalWaypoint(this.waypoint.toPublicWaypoint())).bounds(0, 0, 56, 20).build();
+                this.addButton.setTooltip(tooltip("mapsyncer.gui.help.admin.waypoints_import_add"));
+                this.addButton.setTooltipDelay(TOOLTIP_DELAY);
+            }
+
+            @Override
+            public List<? extends GuiEventListener> children() {
+                return List.of(addButton);
+            }
+
+            @Override
+            public List<? extends NarratableEntry> narratables() {
+                return List.of(addButton);
+            }
+
+            @Override
+            public void extractContent(GuiGraphicsExtractor graphics, int mouseX, int mouseY,
+                                       boolean hovered, float partialTick) {
+                int buttonWidth = 56;
+                int buttonX = getContentRight() - buttonWidth - 6;
+                int buttonY = getContentY() + 4;
+                addButton.setRectangle(buttonX, buttonY, buttonWidth, 20);
+                PacketHandler.PublicWaypoint publicWaypoint = waypoint.toPublicWaypoint();
+                addButton.active = isOwner()
+                        && ClientPlayNetworking.canSend(PacketHandler.PublicWaypointAddPayload.TYPE)
+                        && !PublicWaypointImportClientState.isPending(publicWaypoint);
+                addButton.setMessage(PublicWaypointImportClientState.isPending(publicWaypoint)
+                        ? Component.translatable("mapsyncer.gui.admin.waypoints.import.adding")
+                        : Component.translatable("mapsyncer.gui.admin.waypoints.import.add"));
+
+                int textX = getContentX() + 6;
+                int textWidth = Math.max(40, getContentWidth() - buttonWidth - 24);
+                drawSingleLine(graphics, Component.literal(waypoint.name()), textX, getContentY() + 4,
+                        textWidth, COLOR_TEXT);
+                drawSingleLine(graphics, Component.translatable("mapsyncer.gui.admin.waypoints.import.row",
+                                waypoint.dimension(), waypoint.x(), waypoint.y(), waypoint.z()),
+                        textX, getContentY() + 16, textWidth, COLOR_SUBTLE);
+            }
+
+            @Override
+            public boolean mouseClicked(MouseButtonEvent event, boolean doubled) {
+                LocalWaypointList.this.setSelected(this);
+                if (super.mouseClicked(event, doubled)) {
+                    return true;
+                }
+                submitLocalWaypoint(waypoint.toPublicWaypoint());
+                return true;
+            }
+
+            @Override
+            public void visitWidgets(Consumer<AbstractWidget> consumer) {
+                consumer.accept(addButton);
+            }
+        }
     }
 
     private enum Tab {

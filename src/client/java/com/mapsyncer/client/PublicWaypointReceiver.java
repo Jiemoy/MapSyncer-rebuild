@@ -87,7 +87,7 @@ public final class PublicWaypointReceiver {
             return;
         }
 
-        Path waypointsFile = findWaypointsFile(serverDir);
+        Path waypointsFile = XaeroWaypointFiles.findWaypointsFile(serverDir);
         if (waypointsFile == null) {
             finish(PublicWaypointClientState.Status.MISSING_DIR, payload.waypoints().size(), true,
                     "mapsyncer.waypoints.skipped");
@@ -151,35 +151,6 @@ public final class PublicWaypointReceiver {
         } catch (IOException atomicMoveFailed) {
             Files.move(tmp, target, StandardCopyOption.REPLACE_EXISTING);
         }
-    }
-
-    private static Path findWaypointsFile(Path worldMapServerDir) {
-        Path xaeroDir = worldMapServerDir.getParent();
-        if (xaeroDir == null) {
-            return null;
-        }
-        Path gameDir = xaeroDir.getParent();
-        if (gameDir == null) {
-            return null;
-        }
-
-        String serverFolder = worldMapServerDir.getFileName().toString();
-        Path minimapWaypoints = gameDir.resolve("minimap").resolve("Multiplayer")
-                .resolve(serverFolder).resolve("waypoints.txt");
-        if (Files.exists(minimapWaypoints) || Files.exists(minimapWaypoints.getParent())) {
-            return minimapWaypoints;
-        }
-
-        Path legacy = gameDir.resolve("minimap").resolve(serverFolder).resolve("waypoints.txt");
-        if (Files.exists(legacy) || Files.exists(legacy.getParent())) {
-            return legacy;
-        }
-
-        Path worldMapWaypoints = worldMapServerDir.resolve("waypoints.txt");
-        if (Files.exists(worldMapWaypoints) || Files.exists(worldMapWaypoints.getParent())) {
-            return worldMapWaypoints;
-        }
-        return null;
     }
 
     private static boolean isManagedGroupLine(String line, String groupName) {
