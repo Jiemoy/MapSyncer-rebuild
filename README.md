@@ -48,34 +48,72 @@ MapSyncer 用于把服务端已探索区域同步到客户端的 Xaero World Map
 
 GUI 中每个主要按钮和设置项都带有悬浮说明。
 
-### 玩家同步命令
+## 命令速查
+
+### 玩家命令
 
 ```text
+/mapsyncer
+/mapsyncer help
 /mapsyncer gui
+/mapsyncergui
 /mapsyncer sync
 /mapsyncer sync radius <blocks>
 /mapsyncer sync all
 /mapsyncer sync <dimension>
 ```
 
-- `/mapsyncer sync`：同步当前维度
-- `/mapsyncer sync radius <blocks>`：同步当前维度指定半径内的地图
-- `/mapsyncer sync all`：同步所有已生成缓存的维度
-- `/mapsyncer sync <dimension>`：同步指定维度，例如 `overworld` 或 `minecraft:the_nether`
+| 命令 | 作用 |
+| --- | --- |
+| `/mapsyncer` | 显示帮助信息 |
+| `/mapsyncer help` | 显示帮助信息 |
+| `/mapsyncer gui` | 打开 MapSyncer GUI |
+| `/mapsyncergui` | 打开 MapSyncer GUI 的快捷命令 |
+| `/mapsyncer sync` | 同步当前维度 |
+| `/mapsyncer sync radius <blocks>` | 同步当前维度指定半径内的地图，例如 `/mapsyncer sync radius 1000` |
+| `/mapsyncer sync all` | 同步所有已生成缓存的维度 |
+| `/mapsyncer sync <dimension>` | 同步指定维度，例如 `/mapsyncer sync overworld`、`/mapsyncer sync minecraft:the_nether` |
 
-### 服务端管理命令
+`<dimension>` 支持 `overworld`、`the_nether`、`the_end`，也支持完整维度 ID，例如 `minecraft:overworld` 或其他模组维度 ID。
+
+### OP / 服务端管理命令
 
 ```text
+/mapsyncer
+/mapsyncer help
+/mapsyncer gui
 /mapsyncer generate
 /mapsyncer generate <dimension>
 /mapsyncer generate <dimension> force
 /mapsyncer generate <dimension> <x> <z>
-/mapsyncer incremental run
 /mapsyncer status
+/mapsyncer incremental run
 /mapsyncer incremental off
-/mapsyncer incremental tick [interval]
-/mapsyncer incremental scheduled [hour] [minute]
+/mapsyncer incremental tick
+/mapsyncer incremental tick <interval>
+/mapsyncer incremental scheduled
+/mapsyncer incremental scheduled <hour>
+/mapsyncer incremental scheduled <hour> <minute>
 ```
+
+| 命令 | 作用 |
+| --- | --- |
+| `/mapsyncer` / `/mapsyncer help` | 显示 OP 管理命令帮助 |
+| `/mapsyncer gui` | 让当前 OP 玩家打开管理 GUI；控制台不能使用 GUI |
+| `/mapsyncer generate` | 后台生成所有维度的 Xaero 地图缓存 |
+| `/mapsyncer generate <dimension>` | 后台生成指定维度缓存 |
+| `/mapsyncer generate <dimension> force` | 清理并强制重新生成指定维度缓存 |
+| `/mapsyncer generate <dimension> <x> <z>` | 只生成指定 MCA region，例如 `/mapsyncer generate minecraft:overworld 0 0` |
+| `/mapsyncer status` | 查看生成进度、增量模式和缓存统计 |
+| `/mapsyncer incremental run` | 立即执行一次增量扫描 |
+| `/mapsyncer incremental off` | 关闭自动增量更新 |
+| `/mapsyncer incremental tick` | 启用按 tick 间隔执行的增量更新，使用当前配置间隔 |
+| `/mapsyncer incremental tick <interval>` | 启用按 tick 间隔执行的增量更新，例如 `200` 约等于 10 秒 |
+| `/mapsyncer incremental scheduled` | 启用每天定时增量更新，使用当前配置时间 |
+| `/mapsyncer incremental scheduled <hour>` | 设置每天指定小时执行，分钟默认为 `0` |
+| `/mapsyncer incremental scheduled <hour> <minute>` | 设置每天指定时间执行，例如 `/mapsyncer incremental scheduled 4 30` |
+
+OP 管理命令需要权限等级 `LEVEL_OWNERS`。建议首次开服后先执行 `/mapsyncer generate` 生成基础缓存，再让玩家使用 GUI 或 `/mapsyncer sync` 同步。
 
 ## 配置
 
