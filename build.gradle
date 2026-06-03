@@ -14,6 +14,15 @@ tasks.withType(org.gradle.api.tasks.bundling.AbstractArchiveTask).configureEach 
 	archiveVersion = ""
 }
 
+tasks.withType(Jar).configureEach {
+	from("LICENSE") {
+		rename { "${it}_${project.mod_id}" }
+	}
+	from("NOTICE") {
+		rename { "${it}_${project.mod_id}" }
+	}
+}
+
 repositories {
 	// Loom adds Minecraft and Fabric repositories automatically.
 }
