@@ -7,7 +7,11 @@ version = project.mod_version
 group = project.maven_group
 
 base {
-	archivesName = project.mod_id
+	archivesName = project.mod_version
+}
+
+tasks.withType(org.gradle.api.tasks.bundling.AbstractArchiveTask).configureEach {
+	archiveVersion = ""
 }
 
 repositories {
